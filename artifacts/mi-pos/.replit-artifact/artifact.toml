@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "Mi POS"
+version = "1.0.0"
+id = "artifacts/mi-pos"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 23802
+
+[services.development]
+run = "pnpm --filter @workspace/mi-pos run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/mi-pos", "run", "build" ]
+publicDir = "artifacts/mi-pos/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "23802"
+BASE_PATH = "/"
