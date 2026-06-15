@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, Component } from "react";
 import { db, auth, storage } from "./firebase";
 import {
   collection, doc, onSnapshot, setDoc, deleteDoc, addDoc,
@@ -422,180 +422,190 @@ function PayModal({ total, onConfirm, onClose }) {
   );
 }
 
-// ─── CameraScanner ────────────────────────────────────────────────────────────
-// Primary:  native BarcodeDetector (Chrome 83+, Edge 83+, Android Chrome)
-// Fallback: html5-qrcode (bundles ZXing, works on all modern browsers)
-// If both fail: shows a clear error message — never crashes the app.
-function CameraScanner({ onCode, onClose }) {
-  const [status, setStatus]     = useState("Iniciando cámara…");
-  const [error, setError]       = useState("");
-  const [detected, setDetected] = useState("");
-  const videoRef    = useRef(null);
-  const h5scanRef   = useRef(null);   // html5-qrcode instance
-  const stopRef     = useRef(null);   // teardown fn for native path
-  const activeRef   = useRef(true);
-  const SCANNER_ID  = "mi-pos-h5qr";
+// ─── ScannerBoundary ──────────────────────────────────────────────────────────
+// Catches any React render error inside the scanner and shows it on-screen
+// instead of letting it propagate and blank the entire app.
+class ScannerBoundary extends Component {
+  constructor(props) { super(props); this.state = { crashed: false, msg: "" }; }
+  static getDerivedStateFromError(e) {
+    return { crashed: true, msg: e?.message || "Error inesperado en el escáner" };
+  }
+  render() {
+    if (this.state.crashed) {
+      return (
+        <div className="scanner-overlay" onClick={this.props.onClose}>
+          <div className="scanner-box" onClick={e => e.stopPropagation()}>
+            <h2>📷 Escáner</h2>
+            <div style={{ background: "#ff6b6b18", border: "1px solid #ff6b6b55", borderRadius: 10, padding: "14px 12px", fontSize: 13, color: "#ff9999", marginBottom: 12, lineHeight: 1.7 }}>
+              ⚠️ {this.state.msg}
+            </div>
+            <p style={{ fontSize: 12, color: "#9ca3af" }}>Ingresá el código manualmente o cerrá e intentá de nuevo.</p>
+            <div className="modal-actions" style={{ marginTop: 10 }}>
+              <button className="btn-secondary" style={{ flex: 1 }} onClick={this.props.onClose}>Cerrar</button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+// ─── CameraScannerInner ────────────────────────────────────────────────────────
+// Pure native: getUserMedia → <video> visible → BarcodeDetector loop.
+// No external libraries. Every failure shown on-screen, never blank.
+function CameraScannerInner({ onCode, onClose }) {
+  const [msg, setMsg]     = useState("Solicitando acceso a la cámara…");
+  const [error, setError] = useState("");
+  const [found, setFound] = useState("");
+  const videoRef  = useRef(null);
+  const activeRef = useRef(true);
+  const streamRef = useRef(null);
+  const rafRef    = useRef(null);
 
   useEffect(() => {
     activeRef.current = true;
 
-    // ── teardown ──────────────────────────────────────────────────────────────
-    const stopAll = () => {
+    const stopCamera = () => {
       activeRef.current = false;
-      try { stopRef.current?.(); } catch (_) {}
-      if (h5scanRef.current) {
-        try { h5scanRef.current.stop().catch(() => {}); } catch (_) {}
-        h5scanRef.current = null;
+      if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
+      if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
+    };
+
+    const run = async () => {
+      // ── 1. Check API support ──────────────────────────────────────────────
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setError("Este navegador no permite acceso a la cámara. Usá Chrome para Android e ingresá el código manualmente.");
+        return;
       }
-    };
 
-    const confirmCode = (code) => {
-      if (!activeRef.current) return;
-      stopAll();
-      setDetected(code);
-      setStatus(`✓ ${code}`);
-      setTimeout(() => onCode(code), 400);
-    };
-
-    // ── path 1: native BarcodeDetector ───────────────────────────────────────
-    const tryNative = async () => {
-      // getSupportedFormats can throw on partial implementations → fall through
-      const supported = await window.BarcodeDetector.getSupportedFormats();
-      const want = ["ean_13", "ean_8", "code_128", "code_39", "upc_a", "upc_e"];
-      const formats = want.filter(f => supported.includes(f));
-      if (!formats.length) throw new Error("no_supported_formats");
-
-      const detector = new window.BarcodeDetector({ formats });
-
-      const stream = await (async () => {
-        if (!navigator.mediaDevices?.getUserMedia) throw Object.assign(new Error("Sin API de cámara."), { kind: "NO_CAMERA" });
-        try {
-          return await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
-            audio: false,
-          });
-        } catch (e) {
-          const n = e?.name || "";
-          if (n === "NotAllowedError" || n === "PermissionDeniedError")
-            throw Object.assign(new Error("Permiso de cámara denegado. Habilitá la cámara en el navegador."), { kind: "PERMISSION" });
-          throw Object.assign(new Error(`No se pudo acceder a la cámara (${n || e?.message}).`), { kind: "CAMERA_ERR" });
+      // ── 2. Request camera stream ──────────────────────────────────────────
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" } },
+          audio: false,
+        });
+      } catch (err) {
+        const n = err?.name || "";
+        if (n === "NotAllowedError" || n === "PermissionDeniedError") {
+          setError("Permiso de cámara denegado.\n\nTocá el ícono 🔒 en la barra del navegador → Permisos → Cámara → Permitir, luego recargá la página.");
+        } else if (n === "NotFoundError" || n === "DevicesNotFoundError") {
+          setError("No se encontró ninguna cámara en este dispositivo.");
+        } else if (n === "NotReadableError" || n === "TrackStartError") {
+          setError(`La cámara está en uso por otra app (${n}). Cerrá otras apps que usen la cámara y volvé a intentar.`);
+        } else {
+          setError(`No se pudo acceder a la cámara.\nError: ${n || err?.message || "desconocido"}\n\nIngresá el código manualmente.`);
         }
-      })();
+        return;
+      }
 
+      streamRef.current = stream;
       if (!activeRef.current) { stream.getTracks().forEach(t => t.stop()); return; }
 
-      // Create video element programmatically (avoids ref timing issues)
-      const container = document.getElementById(SCANNER_ID);
-      if (!container) { stream.getTracks().forEach(t => t.stop()); return; }
-      const video = document.createElement("video");
-      video.muted = true; video.playsInline = true; video.autoplay = true;
-      video.style.cssText = "width:100%;border-radius:10px;display:block;background:#111;min-height:200px;";
-      container.appendChild(video);
+      // ── 3. Attach stream to <video> and play ─────────────────────────────
+      const video = videoRef.current;
+      if (!video) { stream.getTracks().forEach(t => t.stop()); return; }
       video.srcObject = stream;
-      try { await video.play(); } catch (_) {}
-
-      stopRef.current = () => {
-        stream.getTracks().forEach(t => t.stop());
-        try { container.removeChild(video); } catch (_) {}
-      };
-      setStatus("Apuntá al código de barras");
-
-      const recent = [];
-      const loop = async () => {
-        if (!activeRef.current) return;
-        try {
-          const results = await detector.detect(video);
-          for (const r of results) {
-            if (!r.rawValue) continue;
-            recent.push(r.rawValue);
-            if (recent.length >= 2 && recent.at(-1) === recent.at(-2)) { confirmCode(r.rawValue); return; }
-          }
-        } catch (_) {}
-        if (activeRef.current) requestAnimationFrame(loop);
-      };
-      requestAnimationFrame(loop);
-    };
-
-    // ── path 2: html5-qrcode fallback ─────────────────────────────────────────
-    // Bundles ZXing internally — works on Firefox, Safari, older Android, etc.
-    const tryHtml5Qrcode = async () => {
-      if (!window.Html5Qrcode) {
-        await new Promise((resolve, reject) => {
-          const s = document.createElement("script");
-          s.src = "https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js";
-          s.onload = resolve;
-          s.onerror = () => reject(Object.assign(
-            new Error("Sin conexión para cargar el escáner. Ingresá el código manualmente."),
-            { kind: "CDN" }
-          ));
-          document.head.appendChild(s);
-        });
-      }
+      try { await video.play(); } catch (_) { /* AbortError on fast unmount — ignore */ }
       if (!activeRef.current) return;
 
-      const scanner = new window.Html5Qrcode(SCANNER_ID);
-      h5scanRef.current = scanner;
-      setStatus("Apuntá al código de barras");
+      setMsg("Cámara activa — apuntá al código de barras");
 
-      const recent = [];
-      await scanner.start(
-        { facingMode: "environment" },
-        { fps: 10, qrbox: { width: 240, height: 120 }, aspectRatio: 1.33 },
-        (decodedText) => {
-          if (!activeRef.current || !decodedText) return;
-          recent.push(decodedText);
-          if (recent.length >= 2 && recent.at(-1) === recent.at(-2)) confirmCode(decodedText);
-        },
-        () => {} // per-frame decode error — ignore
-      );
-    };
-
-    // ── main: native → html5-qrcode → error ──────────────────────────────────
-    const start = async () => {
-      if (typeof window.BarcodeDetector !== "undefined") {
-        try { await tryNative(); return; } catch (e) {
-          // Only re-throw permission/camera errors; other errors fall to html5-qrcode
-          if (e?.kind === "PERMISSION" || e?.kind === "NO_CAMERA") throw e;
-        }
+      // ── 4. Check BarcodeDetector availability ────────────────────────────
+      if (typeof window.BarcodeDetector === "undefined") {
+        setError(
+          "Tu navegador no soporta el escáner automático.\n\n" +
+          "Actualizá Chrome (necesitás versión 83 o superior) o ingresá el código manualmente.\n\n" +
+          "El video de la cámara está activo arriba — podés leer el código visualmente."
+        );
+        // Keep video running so user can read the code visually
+        return;
       }
-      await tryHtml5Qrcode();
+
+      // ── 5. Build detector ─────────────────────────────────────────────────
+      let detector;
+      try {
+        const supported = await window.BarcodeDetector.getSupportedFormats();
+        const want = ["ean_13", "ean_8", "code_128", "code_39", "upc_a", "upc_e", "qr_code"];
+        const formats = want.filter(f => supported.includes(f));
+        detector = new window.BarcodeDetector({ formats: formats.length ? formats : ["ean_13", "code_128"] });
+      } catch (detErr) {
+        setError(`Error al inicializar el detector: ${detErr?.message ?? String(detErr)}\n\nIngresá el código manualmente.`);
+        return;
+      }
+
+      // ── 6. RAF scan loop ──────────────────────────────────────────────────
+      const recent = [];
+      const scan = async () => {
+        if (!activeRef.current) return;
+        if (video.readyState >= 2) {
+          try {
+            const results = await detector.detect(video);
+            for (const r of results) {
+              if (!r.rawValue) continue;
+              recent.push(r.rawValue);
+              if (recent.length >= 2 && recent.at(-1) === recent.at(-2)) {
+                activeRef.current = false;
+                stream.getTracks().forEach(t => t.stop());
+                setFound(r.rawValue);
+                setMsg(`✓ Detectado: ${r.rawValue}`);
+                setTimeout(() => onCode(r.rawValue), 400);
+                return;
+              }
+            }
+          } catch (_) { /* detect() rejects on empty/paused frames — ignore */ }
+        }
+        if (activeRef.current) rafRef.current = requestAnimationFrame(scan);
+      };
+      rafRef.current = requestAnimationFrame(scan);
     };
 
-    start().catch((err) => {
-      const kind = err?.kind || "";
-      if (kind === "PERMISSION") setError("Permiso de cámara denegado. Habilitá la cámara en el navegador.");
-      else if (kind === "NO_CAMERA") setError("No se encontró ninguna cámara en este dispositivo.");
-      else if (kind === "CDN") setError(err.message);
-      else setError("Escáner no disponible. Ingresá el código manualmente.");
-    });
-
-    return stopAll;
+    run();
+    return stopCamera;
   }, []);
 
   return (
     <div className="scanner-overlay" onClick={onClose}>
       <div className="scanner-box" onClick={e => e.stopPropagation()}>
-        <h2>📷 Escanear código de barras</h2>
-        <p style={{ fontSize: 11, color: "#6b7280", marginBottom: 8 }}>EAN-13 · EAN-8 · Code-128 · UPC · QR</p>
-        {error ? (
-          <div style={{ background: "#ff6b6b18", border: "1px solid #ff6b6b55", borderRadius: 10, padding: "14px 12px", fontSize: 13, color: "#ff9999", marginBottom: 10, lineHeight: 1.6 }}>
+        <h2>📷 Escanear código</h2>
+
+        {/* Video always rendered — visible as soon as camera grants permission */}
+        <div style={{ position: "relative", display: error && !streamRef.current ? "none" : "block" }}>
+          <video
+            ref={videoRef}
+            muted
+            playsInline
+            style={{ width: "100%", borderRadius: 10, display: "block", background: "#111", minHeight: 220 }}
+          />
+          {!found && !error && <div className="quagga-aim"><div className="quagga-aim-line" /></div>}
+        </div>
+
+        {error && (
+          <div style={{ background: "#ff6b6b18", border: "1px solid #ff6b6b55", borderRadius: 10, padding: "14px 12px", fontSize: 13, color: "#ff9999", marginTop: 10, lineHeight: 1.7, whiteSpace: "pre-line" }}>
             ⚠️ {error}
           </div>
-        ) : (
-          <div style={{ position: "relative" }}>
-            {/* Container used by both native (video injected programmatically) and html5-qrcode */}
-            <div id={SCANNER_ID} style={{ width: "100%", borderRadius: 10, overflow: "hidden", minHeight: 200, background: "#111" }} />
-            {!detected && <div className="quagga-aim"><div className="quagga-aim-line" /></div>}
-          </div>
         )}
-        <div className={`scan-status${detected ? " found" : ""}`} style={{ marginTop: 8, marginBottom: 4 }}>
-          {status}
+
+        <div className={`scan-status${found ? " found" : ""}`} style={{ marginTop: 8, marginBottom: 4, whiteSpace: "pre-line" }}>
+          {msg}
         </div>
         <div className="modal-actions" style={{ marginTop: 10 }}>
           <button className="btn-secondary" style={{ flex: 1 }} onClick={onClose}>Cancelar</button>
         </div>
       </div>
     </div>
+  );
+}
+
+// ─── CameraScanner ────────────────────────────────────────────────────────────
+// Wraps CameraScannerInner in an Error Boundary so any unexpected crash
+// shows a message on-screen instead of blanking the whole app.
+function CameraScanner(props) {
+  return (
+    <ScannerBoundary onClose={props.onClose}>
+      <CameraScannerInner {...props} />
+    </ScannerBoundary>
   );
 }
 
