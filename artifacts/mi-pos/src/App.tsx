@@ -519,7 +519,7 @@ function QuaggaProductScanner({ onCode, onClose }) {
 
 // ─── ProductModal ─────────────────────────────────────────────────────────────
 function ProductModal({ product, onSave, onClose }) {
-  const [form, setForm] = useState(product || { name: "", category: "Básicos", type: "unit", price: "", stock: "", unit: "pza", barcode: "", img: "" });
+  const [form, setForm] = useState(product || { name: "", category: "Básicos", type: "unit", price: "", stock: "", unit: "pza", barcode: "", img: "", minStock: 6 });
   const [uploading, setUploading] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [barcodeFlash, setBarcodeFlash] = useState(false);
@@ -619,6 +619,10 @@ function ProductModal({ product, onSave, onClose }) {
           </div>
         </div>
         <div className="modal-section">
+          <div className="modal-label">Stock mínimo <span style={{ fontWeight: 400, color: "#6b7280" }}>(alerta de stock bajo)</span></div>
+          <input className="modal-input" type="number" min="0" value={form.minStock ?? 6} onChange={e => set("minStock", parseInt(e.target.value) || 0)} placeholder="6" />
+        </div>
+        <div className="modal-section">
           <div className="modal-label">Código de barras</div>
           <div className="barcode-row">
             <input
@@ -641,7 +645,7 @@ function ProductModal({ product, onSave, onClose }) {
         <div className="modal-actions">
           <button className="btn-secondary" onClick={onClose}>Cancelar</button>
           <button className="btn-primary" disabled={uploading} onClick={() => {
-            if (form.name && form.price) onSave({ ...form, price: parseFloat(form.price), stock: parseFloat(form.stock) || 0 });
+            if (form.name && form.price) onSave({ ...form, price: parseFloat(form.price), stock: parseFloat(form.stock) || 0, minStock: parseInt(form.minStock) || 6 });
           }}>Guardar</button>
         </div>
       </div>
@@ -751,13 +755,13 @@ function SaleView({ products, userProfile }) {
         <div className="categories">{CATEGORIES.map(c => <button key={c} className={`cat-btn${cat === c ? " active" : ""}`} onClick={() => setCat(c)}>{c}</button>)}</div>
         <div className="grid">
           {filtered.map(p => (
-            <div key={p.id} className={`product-card${p.stock < 3 ? " low-stock" : ""}`} onClick={() => handleProductClick(p)}>
+            <div key={p.id} className={`product-card${p.stock < (p.minStock ?? 6) ? " low-stock" : ""}`} onClick={() => handleProductClick(p)}>
               <div className="prod-img">{p.img ? <img src={p.img} alt="" /> : getCatEmoji(p.category)}</div>
               <span className={`type-badge ${p.type === "kg" ? "type-kg" : "type-unit"}`}>{p.type === "kg" ? "⚖️ kg" : "📦 unid"}</span>
               <div className="product-name">{p.name}</div>
               <div className="product-cat">{p.category}</div>
               <div className="product-price">{fmt(p.price)}</div>
-              <div className={`product-stock ${p.stock < 3 ? "stock-low" : "stock-ok"}`}>Stock: {p.stock} {p.unit}</div>
+              <div className={`product-stock ${p.stock < (p.minStock ?? 6) ? "stock-low" : "stock-ok"}`}>Stock: {p.stock} {p.unit}</div>
             </div>
           ))}
           {filtered.length === 0 && <div style={{ color: "#6b7280", fontSize: 12, gridColumn: "1/-1", padding: 16 }}>No se encontraron productos</div>}
@@ -837,7 +841,7 @@ function InventoryView({ products, userProfile }) {
                 <td style={{ fontWeight: 500 }}>{p.name}<br /><span style={{ fontSize: 10, color: "#6b7280", fontFamily: "monospace" }}>{p.barcode || "—"}</span></td>
                 <td><span className={`type-badge ${p.type === "kg" ? "type-kg" : "type-unit"}`}>{p.type === "kg" ? "kg" : "unid"}</span></td>
                 <td style={{ fontFamily: "monospace", color: "#00c896" }}>{fmt(p.price)}</td>
-                <td style={{ color: p.stock < 3 ? "#ff6b6b" : "#e8eaf0" }}>{p.stock} {p.unit}</td>
+                <td style={{ color: p.stock < (p.minStock ?? 6) ? "#ff6b6b" : "#e8eaf0" }}>{p.stock} {p.unit}</td>
                 {canEdit && <td><button className="btn-edit" onClick={() => setModal(p)}>✏️</button><button className="btn-del" onClick={() => handleDelete(p.id)}>🗑</button></td>}
               </tr>
             ))}
@@ -887,7 +891,7 @@ function ReportsView({ sales, products }) {
           <div className="stat-card"><div className="stat-label">Artículos</div><div className="stat-value stat-orange">{totalItems.toFixed(1)}</div></div>
           <div className="stat-card"><div className="stat-label">Ticket prom.</div><div className="stat-value stat-green">{fmt(sales.length ? totalVentas / sales.length : 0)}</div></div>
           <div className="stat-card"><div className="stat-label">Productos</div><div className="stat-value stat-blue">{products.length}</div></div>
-          <div className="stat-card"><div className="stat-label">Stock bajo</div><div className="stat-value" style={{ color: "#ff6b6b" }}>{products.filter(p => p.stock < 3).length}</div></div>
+          <div className="stat-card"><div className="stat-label">Stock bajo</div><div className="stat-value" style={{ color: "#ff6b6b" }}>{products.filter(p => p.stock < (p.minStock ?? 6)).length}</div></div>
         </div>
         <div className="rep-section">
           <h3>💳 Por método de pago</h3>
@@ -909,8 +913,8 @@ function ReportsView({ sales, products }) {
         </div>
         <div className="rep-section">
           <h3>⚠️ Stock bajo</h3>
-          {products.filter(p => p.stock < 3).length === 0 && <div style={{ color: "#6b7280", fontSize: 12 }}>Todo bien ✓</div>}
-          {products.filter(p => p.stock < 3).map(p => <div key={p.id} className="rep-row"><span>{p.name}</span><span style={{ color: "#ff6b6b" }}>{p.stock} {p.unit}</span></div>)}
+          {products.filter(p => p.stock < (p.minStock ?? 6)).length === 0 && <div style={{ color: "#6b7280", fontSize: 12 }}>Todo bien ✓</div>}
+          {products.filter(p => p.stock < (p.minStock ?? 6)).map(p => <div key={p.id} className="rep-row"><span>{p.name}</span><span style={{ color: "#ff6b6b" }}>{p.stock} {p.unit}</span></div>)}
         </div>
       </div>
     </div>
