@@ -429,42 +429,85 @@ function QuaggaProductScanner({ onCode, onClose }) {
   const [status, setStatus] = useState("Iniciando cámara…");
   const [error, setError] = useState("");
   const [detected, setDetected] = useState("");
+  const viewportRef = useRef(null);
   const quaggaStarted = useRef(false);
+  const activeRef = useRef(true);
 
   useEffect(() => {
-    let active = true;
+    activeRef.current = true;
+
     const startQuagga = async () => {
+      // 1. Check camera API availability first
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error("NO_CAMERA_API");
+      }
+
+      // 2. Test camera permission before loading Quagga
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+        stream.getTracks().forEach(t => t.stop());
+      } catch (e) {
+        const name = e?.name || "";
+        if (name === "NotAllowedError" || name === "PermissionDeniedError") throw new Error("PERMISSION_DENIED");
+        if (name === "NotFoundError" || name === "DevicesNotFoundError") throw new Error("NO_CAMERA");
+        throw new Error("CAMERA_ERROR");
+      }
+
+      // 3. Load Quagga2 from CDN if not already present
       if (!window.Quagga) {
         await new Promise((resolve, reject) => {
           const s = document.createElement("script");
           s.src = "https://cdn.jsdelivr.net/npm/@ericblade/quagga2@1.8.4/dist/quagga.min.js";
           s.onload = resolve;
-          s.onerror = () => reject(new Error("No se pudo cargar Quagga2"));
+          s.onerror = () => reject(new Error("CDN_ERROR"));
           document.head.appendChild(s);
         });
       }
+
+      if (!activeRef.current) return;
+
+      // 4. Ensure the viewport element is in the DOM
+      const target = viewportRef.current;
+      if (!target) throw new Error("NO_ELEMENT");
+
+      // 5. Init Quagga using the React ref (not getElementById)
       await new Promise((resolve, reject) => {
-        window.Quagga.init({
-          inputStream: {
-            name: "Live", type: "LiveStream",
-            target: document.getElementById("quagga-viewport"),
-            constraints: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } },
+        window.Quagga.init(
+          {
+            inputStream: {
+              name: "Live",
+              type: "LiveStream",
+              target,
+              constraints: {
+                facingMode: "environment",
+                width: { ideal: 1280 },
+                height: { ideal: 720 },
+              },
+            },
+            decoder: {
+              readers: ["ean_reader", "ean_8_reader", "code_128_reader", "code_39_reader", "upc_reader"],
+              multiple: false,
+            },
+            locate: true,
+            numOfWorkers: 0,
           },
-          decoder: {
-            readers: ["ean_reader", "ean_8_reader", "code_128_reader", "code_39_reader", "upc_reader"],
-            multiple: false,
-          },
-          locate: true,
-        }, (err) => { if (err) { reject(err); return; } resolve(); });
+          (err) => {
+            if (err) { reject(err); return; }
+            resolve();
+          }
+        );
       });
-      if (!active) { window.Quagga.stop(); return; }
+
+      if (!activeRef.current) { window.Quagga.stop(); return; }
+
       window.Quagga.start();
       quaggaStarted.current = true;
       setStatus("Apuntá al código de barras");
 
       const recentCodes = [];
       window.Quagga.onDetected((result) => {
-        if (!active) return;
+        if (!activeRef.current) return;
         const code = result?.codeResult?.code;
         const confidence = (result?.codeResult?.decodedCodes || [])
           .filter(x => x.error !== undefined)
@@ -472,7 +515,7 @@ function QuaggaProductScanner({ onCode, onClose }) {
         if (!code || confidence < 1.5) return;
         recentCodes.push(code);
         if (recentCodes.length >= 2 && recentCodes[recentCodes.length - 1] === recentCodes[recentCodes.length - 2]) {
-          active = false;
+          activeRef.current = false;
           setDetected(code);
           setStatus(`✓ ${code}`);
           window.Quagga.stop();
@@ -483,15 +526,24 @@ function QuaggaProductScanner({ onCode, onClose }) {
     };
 
     startQuagga().catch((err) => {
-      const msg = err?.message || "";
-      setError(msg.includes("getUserMedia") || msg.includes("camera") || err?.name === "NotAllowedError"
-        ? "Permiso de cámara denegado. Activalo en el navegador e intentá de nuevo."
-        : "Cámara no disponible. Ingresá el código manualmente.");
+      const msg = err?.message || String(err);
+      if (msg === "PERMISSION_DENIED" || err?.name === "NotAllowedError") {
+        setError("Permiso de cámara denegado. Entrá a la configuración del navegador y habilitá la cámara para este sitio.");
+      } else if (msg === "NO_CAMERA" || msg === "NO_CAMERA_API") {
+        setError("No se encontró ninguna cámara en este dispositivo.");
+      } else if (msg === "CDN_ERROR") {
+        setError("No se pudo cargar el escáner (sin conexión). Ingresá el código manualmente.");
+      } else {
+        setError(`Error al iniciar la cámara: ${msg}. Intentá recargar o ingresá el código manualmente.`);
+      }
     });
 
     return () => {
-      active = false;
-      if (quaggaStarted.current) { window.Quagga?.stop(); quaggaStarted.current = false; }
+      activeRef.current = false;
+      if (quaggaStarted.current) {
+        try { window.Quagga?.stop(); } catch (_) {}
+        quaggaStarted.current = false;
+      }
     };
   }, []);
 
@@ -499,16 +551,20 @@ function QuaggaProductScanner({ onCode, onClose }) {
     <div className="scanner-overlay" onClick={onClose}>
       <div className="scanner-box" onClick={e => e.stopPropagation()}>
         <h2>📷 Escanear código de barras</h2>
-        <p>Quagga2 — EAN-13, EAN-8, Code-128, UPC</p>
+        <p>EAN-13 · EAN-8 · Code-128 · UPC</p>
         {error ? (
-          <div style={{ background: "#ff6b6b22", border: "1px solid #ff6b6b44", borderRadius: 8, padding: "10px 12px", fontSize: 12, color: "#ff6b6b", marginBottom: 8 }}>{error}</div>
+          <div style={{ background: "#ff6b6b22", border: "1px solid #ff6b6b55", borderRadius: 8, padding: "12px", fontSize: 13, color: "#ff8888", marginBottom: 10, lineHeight: 1.5 }}>
+            ⚠️ {error}
+          </div>
         ) : (
           <div style={{ position: "relative" }}>
-            <div id="quagga-viewport" />
-            {!detected && <div className="quagga-aim"><div className="quagga-aim-line" /></div>}
+            <div ref={viewportRef} style={{ width: "100%", borderRadius: 10, overflow: "hidden", background: "#000", minHeight: 200, position: "relative" }} />
+            {!detected && (
+              <div className="quagga-aim"><div className="quagga-aim-line" /></div>
+            )}
           </div>
         )}
-        <div className={`scan-status${detected ? " found" : ""}`} style={{ marginBottom: 4 }}>{status}</div>
+        <div className={`scan-status${detected ? " found" : ""}`} style={{ marginBottom: 4, marginTop: 8 }}>{status}</div>
         <div className="modal-actions" style={{ marginTop: 10 }}>
           <button className="btn-secondary" style={{ flex: 1 }} onClick={onClose}>Cancelar</button>
         </div>
