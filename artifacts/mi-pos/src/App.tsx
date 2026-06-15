@@ -206,7 +206,7 @@ const css = `
 `;
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
-function LoginScreen({ onLogin }) {
+function LoginScreen({ firebaseError }) {
   const [tab, setTab] = useState("login");
   const [email, setEmail] = useState("");
   const [pass, setPass] = useState("");
@@ -214,14 +214,25 @@ function LoginScreen({ onLogin }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
+  const friendlyError = (e) => {
+    const msg = e.message || "";
+    if (msg.includes("user-not-found") || msg.includes("wrong-password") || msg.includes("invalid-credential")) return "Email o contraseña incorrectos";
+    if (msg.includes("email-already-in-use")) return "Este email ya está registrado";
+    if (msg.includes("weak-password")) return "La contraseña debe tener al menos 6 caracteres";
+    if (msg.includes("operation-not-allowed") || e.code === "auth/operation-not-allowed") return "Email/Password no está habilitado en Firebase. Activalo en: Firebase Console → Authentication → Sign-in method → Email/Password.";
+    if (msg.includes("network-request-failed")) return "Sin conexión a internet. Verificá tu red.";
+    return msg;
+  };
+
   const handleSubmit = async () => {
+    if (!email || !pass) { setError("Completá email y contraseña"); return; }
     setError(""); setLoading(true);
     try {
       if (tab === "login") {
         await signInWithEmailAndPassword(auth, email, pass);
       } else {
+        if (!name.trim()) { setError("Ingresá tu nombre"); setLoading(false); return; }
         const cred = await createUserWithEmailAndPassword(auth, email, pass);
-        // Save user profile
         await setDoc(doc(db, "users", cred.user.uid), {
           email, name, role: "collaborator", uid: cred.user.uid,
           permissions: { sell: true, viewInventory: true, editInventory: false, viewReports: false },
@@ -229,10 +240,7 @@ function LoginScreen({ onLogin }) {
         });
       }
     } catch (e) {
-      setError(e.message.includes("user-not-found") || e.message.includes("wrong-password") || e.message.includes("invalid-credential")
-        ? "Email o contraseña incorrectos" : e.message.includes("email-already-in-use")
-        ? "Este email ya está registrado" : e.message.includes("weak-password")
-        ? "La contraseña debe tener al menos 6 caracteres" : e.message);
+      setError(friendlyError(e));
     }
     setLoading(false);
   };
@@ -243,6 +251,11 @@ function LoginScreen({ onLogin }) {
         <div style={{ fontSize: 36, textAlign: "center", marginBottom: 8 }}>🛒</div>
         <h1>Mi POS 2</h1>
         <p>Sistema de punto de venta</p>
+        {firebaseError && (
+          <div className="login-error" style={{ marginBottom: 16 }}>
+            ⚠️ {firebaseError}
+          </div>
+        )}
         <div className="login-tabs">
           <button className={`login-tab${tab === "login" ? " active" : ""}`} onClick={() => setTab("login")}>Iniciar sesión</button>
           <button className={`login-tab${tab === "register" ? " active" : ""}`} onClick={() => setTab("register")}>Registrarse</button>
@@ -255,11 +268,11 @@ function LoginScreen({ onLogin }) {
         )}
         <div className="login-field">
           <label>Email</label>
-          <input className="login-input" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="tu@email.com" />
+          <input className="login-input" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="tu@email.com" autoComplete="email" />
         </div>
         <div className="login-field">
           <label>Contraseña</label>
-          <input className="login-input" type="password" value={pass} onChange={e => setPass(e.target.value)} placeholder="••••••" onKeyDown={e => e.key === "Enter" && handleSubmit()} />
+          <input className="login-input" type="password" value={pass} onChange={e => setPass(e.target.value)} placeholder="••••••" autoComplete="current-password" onKeyDown={e => e.key === "Enter" && handleSubmit()} />
         </div>
         <button className="login-btn" onClick={handleSubmit} disabled={loading}>
           {loading ? "Cargando..." : tab === "login" ? "Entrar" : "Crear cuenta"}
@@ -797,30 +810,66 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [userProfile, setUserProfile] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [authError, setAuthError] = useState("");
   const [view, setView] = useState("sale");
   const [products, setProducts] = useState([]);
   const [sales, setSales] = useState([]);
   const [initialized, setInitialized] = useState(false);
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async (u) => {
-      setUser(u);
-      if (u) {
-        const profileSnap = await import("firebase/firestore").then(({ getDoc }) => getDoc(doc(db, "users", u.uid)));
-        if (profileSnap.exists()) {
-          setUserProfile({ id: u.uid, ...profileSnap.data() });
-        } else {
-          // First user = owner
-          const ownerData = { email: u.email, name: u.email, role: "owner", uid: u.uid, permissions: { sell: true, viewInventory: true, editInventory: true, viewReports: true }, createdAt: serverTimestamp() };
-          await setDoc(doc(db, "users", u.uid), ownerData);
-          setUserProfile({ id: u.uid, ...ownerData });
-        }
-      } else {
-        setUserProfile(null);
-      }
+    // Timeout fallback: if Firebase doesn't respond in 8s, stop loading
+    const timeout = setTimeout(() => {
       setAuthLoading(false);
-    });
-    return unsub;
+      setAuthError("No se pudo conectar con Firebase. Verificá que Authentication y Firestore estén habilitados en la consola de Firebase.");
+    }, 8000);
+
+    let unsub = () => {};
+    try {
+      unsub = onAuthStateChanged(auth, async (u) => {
+        clearTimeout(timeout);
+        try {
+          setUser(u);
+          if (u) {
+            const { getDoc } = await import("firebase/firestore");
+            const profileSnap = await getDoc(doc(db, "users", u.uid));
+            if (profileSnap.exists()) {
+              setUserProfile({ id: u.uid, ...profileSnap.data() });
+            } else {
+              const ownerData = { email: u.email, name: u.email, role: "owner", uid: u.uid, permissions: { sell: true, viewInventory: true, editInventory: true, viewReports: true }, createdAt: serverTimestamp() };
+              await setDoc(doc(db, "users", u.uid), ownerData);
+              setUserProfile({ id: u.uid, ...ownerData });
+            }
+          } else {
+            setUserProfile(null);
+          }
+          setAuthError("");
+        } catch (err) {
+          console.error("[Auth] Error loading profile:", err);
+          setAuthError("Error al cargar el perfil: " + (err.message || err));
+          setUser(null);
+        } finally {
+          setAuthLoading(false);
+        }
+      }, (err) => {
+        // onAuthStateChanged error callback
+        clearTimeout(timeout);
+        console.error("[Auth] onAuthStateChanged error:", err);
+        let msg = "Error de autenticación.";
+        if (err.code === "auth/configuration-not-found" || err.code === "auth/invalid-api-key") {
+          msg = "Firebase Authentication no está habilitado. Activá Email/Password en la consola de Firebase.";
+        }
+        setAuthError(msg);
+        setUser(null);
+        setAuthLoading(false);
+      });
+    } catch (err) {
+      clearTimeout(timeout);
+      console.error("[Auth] setup error:", err);
+      setAuthError("Error al inicializar Firebase: " + (err.message || err));
+      setAuthLoading(false);
+    }
+
+    return () => { clearTimeout(timeout); unsub(); };
   }, []);
 
   // Load products from Firestore
@@ -852,8 +901,13 @@ export default function App() {
     return unsub;
   }, [user]);
 
-  if (authLoading) return <div style={{ height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#1a1f2e", color: "#00c896", fontSize: 24 }}>🛒</div>;
-  if (!user) return <><style>{css}</style><LoginScreen /></>;
+  if (authLoading) return (
+    <div style={{ height: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "#1a1f2e", color: "#00c896", gap: 12 }}>
+      <div style={{ fontSize: 36 }}>🛒</div>
+      <div style={{ fontSize: 13, color: "#6b7280" }}>Conectando con Firebase…</div>
+    </div>
+  );
+  if (!user) return <><style>{css}</style><LoginScreen firebaseError={authError} /></>;
 
   const isOwner = userProfile?.role === "owner";
   const perms = userProfile?.permissions || {};
