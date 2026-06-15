@@ -423,111 +423,161 @@ function PayModal({ total, onConfirm, onClose }) {
 }
 
 // ─── CameraScanner ────────────────────────────────────────────────────────────
-// Uses the native BarcodeDetector API (Chrome 83+, Edge 83+, Chrome Android 83+).
-// No external library — avoids all Quagga2 runtime/worker issues.
+// Primary:  native BarcodeDetector (Chrome 83+, Edge 83+, Android Chrome)
+// Fallback: ZXing @zxing/library (all modern browsers, loaded from CDN)
 function CameraScanner({ onCode, onClose }) {
-  const [status, setStatus]   = useState("Iniciando cámara…");
-  const [error, setError]     = useState("");
+  const [status, setStatus]     = useState("Iniciando cámara…");
+  const [engine, setEngine]     = useState("");   // "native" | "zxing"
+  const [error, setError]       = useState("");
   const [detected, setDetected] = useState("");
   const videoRef  = useRef(null);
-  const streamRef = useRef(null);
-  const rafRef    = useRef(null);
+  const stopRef   = useRef(null);   // teardown fn for whichever engine runs
   const activeRef = useRef(true);
 
   useEffect(() => {
     activeRef.current = true;
 
-    const start = async () => {
-      // 1. Verify BarcodeDetector is available
-      if (!("BarcodeDetector" in window)) {
-        throw Object.assign(new Error("NO_DETECTOR"), { kind: "NO_DETECTOR" });
-      }
+    // ── helpers ──────────────────────────────────────────────────────────────
+    const stopAll = () => {
+      activeRef.current = false;
+      try { stopRef.current?.(); } catch (_) {}
+    };
 
-      // 2. Create detector with supported formats
-      const supported = await window.BarcodeDetector.getSupportedFormats();
-      const want = ["ean_13", "ean_8", "code_128", "code_39", "upc_a", "upc_e", "qr_code"];
-      const formats = want.filter(f => supported.includes(f));
-      if (!formats.length) throw Object.assign(new Error("NO_FORMATS"), { kind: "NO_DETECTOR" });
-      const detector = new window.BarcodeDetector({ formats });
+    const confirmCode = (code) => {
+      if (!activeRef.current) return;
+      stopAll();
+      setDetected(code);
+      setStatus(`✓ ${code}`);
+      setTimeout(() => onCode(code), 350);
+    };
 
-      // 3. Start camera stream
-      let stream;
+    // Returns a camera stream or throws with { kind }
+    const getCameraStream = async () => {
+      if (!navigator.mediaDevices?.getUserMedia)
+        throw Object.assign(new Error("Cámara no disponible en este navegador."), { kind: "NO_CAMERA" });
       try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+        return await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
           audio: false,
         });
       } catch (e) {
         const n = e?.name || "";
         if (n === "NotAllowedError" || n === "PermissionDeniedError")
-          throw Object.assign(new Error("Permiso de cámara denegado. Habilitá la cámara en el navegador y volvé a intentar."), { kind: "PERMISSION" });
-        if (n === "NotFoundError" || n === "DevicesNotFoundError")
-          throw Object.assign(new Error("No se encontró ninguna cámara en este dispositivo."), { kind: "NO_CAMERA" });
-        throw Object.assign(new Error(`No se pudo acceder a la cámara (${n || e?.message}).`), { kind: "OTHER" });
+          throw Object.assign(
+            new Error("Permiso de cámara denegado. Habilitá la cámara en la configuración del navegador."),
+            { kind: "PERMISSION" }
+          );
+        throw Object.assign(
+          new Error(`No se pudo acceder a la cámara (${n || e?.message || "error desconocido"}).`),
+          { kind: "CAMERA_ERR" }
+        );
       }
+    };
 
-      streamRef.current = stream;
+    // ── path 1: native BarcodeDetector ───────────────────────────────────────
+    const tryNative = async () => {
+      // getSupportedFormats can throw if the API is partially implemented
+      const supported = await window.BarcodeDetector.getSupportedFormats();
+      const want = ["ean_13", "ean_8", "code_128", "code_39", "upc_a", "upc_e"];
+      const formats = want.filter(f => supported.includes(f));
+      if (!formats.length) throw new Error("no_formats");
+
+      const detector = new window.BarcodeDetector({ formats });
+      const stream   = await getCameraStream();
+
       if (!activeRef.current) { stream.getTracks().forEach(t => t.stop()); return; }
 
-      // 4. Attach stream to video element
       const video = videoRef.current;
-      video.srcObject = stream;
-      video.setAttribute("playsinline", "true");
-      await video.play();
+      if (!video) { stream.getTracks().forEach(t => t.stop()); return; }
 
+      video.srcObject = stream;
+      try { await video.play(); } catch (_) {}   // play() rejection is non-fatal
+
+      stopRef.current = () => stream.getTracks().forEach(t => t.stop());
+      setEngine("native");
       setStatus("Apuntá al código de barras");
 
-      // 5. Detection loop via requestAnimationFrame
       const recent = [];
       const loop = async () => {
         if (!activeRef.current) return;
         try {
           const results = await detector.detect(video);
           for (const r of results) {
-            const code = r.rawValue;
-            if (!code) continue;
-            recent.push(code);
-            // Require 2 consecutive identical reads to avoid false positives
-            if (recent.length >= 2 && recent[recent.length - 1] === recent[recent.length - 2]) {
-              activeRef.current = false;
-              stream.getTracks().forEach(t => t.stop());
-              setDetected(code);
-              setStatus(`✓ ${code}`);
-              setTimeout(() => onCode(code), 350);
-              return;
+            if (!r.rawValue) continue;
+            recent.push(r.rawValue);
+            if (recent.length >= 2 && recent.at(-1) === recent.at(-2)) {
+              confirmCode(r.rawValue); return;
             }
           }
-        } catch (_) { /* detector.detect throws on paused/empty frames — ignore */ }
-        if (activeRef.current) rafRef.current = requestAnimationFrame(loop);
+        } catch (_) {}
+        if (activeRef.current) requestAnimationFrame(loop);
       };
-      rafRef.current = requestAnimationFrame(loop);
+      requestAnimationFrame(loop);
+    };
+
+    // ── path 2: ZXing fallback ────────────────────────────────────────────────
+    const loadZXingScript = () => new Promise((resolve, reject) => {
+      if (window.ZXing) { resolve(); return; }
+      const s = document.createElement("script");
+      s.src = "https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js";
+      s.onload  = resolve;
+      s.onerror = () => reject(Object.assign(new Error("No se pudo cargar ZXing (sin conexión)."), { kind: "CDN" }));
+      document.head.appendChild(s);
+    });
+
+    const tryZXing = async () => {
+      await loadZXingScript();
+      if (!activeRef.current) return;
+
+      const video = videoRef.current;
+      if (!video) return;
+
+      // ZXing BrowserMultiFormatReader manages its own stream internally
+      const codeReader = new window.ZXing.BrowserMultiFormatReader();
+      stopRef.current = () => { try { codeReader.reset(); } catch (_) {} };
+
+      setEngine("zxing");
+      setStatus("Apuntá al código de barras");
+
+      const recent = [];
+      // decodeFromVideoDevice(deviceId=null → default cam, videoElement, callback)
+      await codeReader.decodeFromVideoDevice(null, video, (result, _err) => {
+        if (!activeRef.current || !result) return;
+        const code = result.getText();
+        if (!code) return;
+        recent.push(code);
+        if (recent.length >= 2 && recent.at(-1) === recent.at(-2)) {
+          confirmCode(code);
+        }
+      });
+    };
+
+    // ── main entry: native → ZXing ───────────────────────────────────────────
+    const start = async () => {
+      if (typeof window.BarcodeDetector !== "undefined") {
+        try { await tryNative(); return; } catch (_) { /* fall through */ }
+      }
+      await tryZXing();
     };
 
     start().catch((err) => {
       const kind = err?.kind;
-      if (kind === "NO_DETECTOR") {
-        setError("Tu navegador no soporta el escáner de cámara. Usá Chrome en Android o ingresá el código manualmente.");
-      } else if (kind === "PERMISSION") {
-        setError(err.message);
-      } else if (kind === "NO_CAMERA") {
-        setError(err.message);
-      } else {
-        setError(err?.message || "Error desconocido. Ingresá el código manualmente.");
-      }
+      if (kind === "PERMISSION") setError(err.message);
+      else if (kind === "NO_CAMERA") setError(err.message);
+      else if (kind === "CDN") setError(err.message);
+      else setError(err?.message || "No se pudo iniciar la cámara. Ingresá el código manualmente.");
     });
 
-    return () => {
-      activeRef.current = false;
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      streamRef.current?.getTracks().forEach(t => t.stop());
-    };
+    return stopAll;
   }, []);
 
   return (
     <div className="scanner-overlay" onClick={onClose}>
       <div className="scanner-box" onClick={e => e.stopPropagation()}>
         <h2>📷 Escanear código de barras</h2>
-        <p>EAN-13 · EAN-8 · Code-128 · UPC · QR</p>
+        <p style={{ fontSize: 11, color: "#6b7280", marginBottom: 8 }}>
+          EAN-13 · EAN-8 · Code-128 · UPC{engine === "zxing" ? " · ZXing" : engine === "native" ? " · Nativo" : ""}
+        </p>
         {error ? (
           <div style={{ background: "#ff6b6b18", border: "1px solid #ff6b6b55", borderRadius: 10, padding: "14px 12px", fontSize: 13, color: "#ff9999", marginBottom: 10, lineHeight: 1.6 }}>
             ⚠️ {error}
@@ -538,7 +588,8 @@ function CameraScanner({ onCode, onClose }) {
               ref={videoRef}
               muted
               playsInline
-              style={{ width: "100%", borderRadius: 10, display: "block", background: "#000", minHeight: 200 }}
+              autoPlay
+              style={{ width: "100%", borderRadius: 10, display: "block", background: "#111", minHeight: 200 }}
             />
             {!detected && <div className="quagga-aim"><div className="quagga-aim-line" /></div>}
           </div>
