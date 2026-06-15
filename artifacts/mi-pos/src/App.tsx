@@ -618,9 +618,14 @@ function ProductModal({ product, onSave, onClose }) {
             <input className="modal-input" type="number" value={form.stock} onChange={e => set("stock", e.target.value)} placeholder="0" />
           </div>
         </div>
-        <div className="modal-section">
-          <div className="modal-label">Stock mínimo <span style={{ fontWeight: 400, color: "#6b7280" }}>(alerta de stock bajo)</span></div>
-          <input className="modal-input" type="number" min="0" value={form.minStock ?? 6} onChange={e => set("minStock", parseInt(e.target.value) || 0)} placeholder="6" />
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <div className="modal-section">
+            <div className="modal-label">Stock mínimo ⚠️</div>
+            <input className="modal-input" type="number" min="0" value={form.minStock ?? 6} onChange={e => set("minStock", parseInt(e.target.value) || 0)} placeholder="6" />
+          </div>
+          <div className="modal-section">
+            <div className="modal-label" style={{ color: "#6b7280", fontSize: 11 }}>Alerta de stock bajo cuando quede menos de este valor</div>
+          </div>
         </div>
         <div className="modal-section">
           <div className="modal-label">Código de barras</div>
