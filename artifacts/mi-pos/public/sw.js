@@ -1,14 +1,12 @@
-const CACHE_NAME = 'mi-pos-v1';
+const CACHE_NAME = 'mi-pos-v3';
 
 const STATIC_ASSETS = [
-  '/',
   '/manifest.json',
   '/icon-192.svg',
   '/icon-512.svg',
   '/icon-maskable.svg',
 ];
 
-// Install: pre-cache static assets
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_ASSETS))
@@ -16,7 +14,6 @@ self.addEventListener('install', (event) => {
   self.skipWaiting();
 });
 
-// Activate: delete old caches
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
@@ -26,16 +23,24 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// Fetch: cache-first for static, network-first for API
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
-  // Skip non-GET or cross-origin requests
   if (request.method !== 'GET' || url.origin !== self.location.origin) return;
 
-  // Network-first for /api routes
-  if (url.pathname.startsWith('/api')) {
+  // Skip cross-origin and Firebase requests entirely
+  if (url.hostname.includes('firebase') || url.hostname.includes('google')) return;
+
+  // Skip Vite HMR and dev-server internals
+  if (url.pathname.startsWith('/@') || url.pathname.includes('__vite')) return;
+
+  // Network-first for HTML, JS and CSS (always get fresh app code)
+  const isAppShell = url.pathname === '/' || url.pathname.endsWith('.html')
+    || url.pathname.endsWith('.js') || url.pathname.endsWith('.css')
+    || url.pathname.includes('/assets/');
+
+  if (isAppShell) {
     event.respondWith(
       fetch(request)
         .then((res) => {
@@ -48,7 +53,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Cache-first for everything else (app shell + assets)
+  // Cache-first for static assets (icons, manifest)
   event.respondWith(
     caches.match(request).then((cached) => {
       if (cached) return cached;

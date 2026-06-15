@@ -519,7 +519,11 @@ function QuaggaProductScanner({ onCode, onClose }) {
 
 // ─── ProductModal ─────────────────────────────────────────────────────────────
 function ProductModal({ product, onSave, onClose }) {
-  const [form, setForm] = useState(product || { name: "", category: "Básicos", type: "unit", price: "", stock: "", unit: "pza", barcode: "", img: "", minStock: 6 });
+  const [form, setForm] = useState(
+    product
+      ? { ...product, minStock: product.minStock ?? 6 }
+      : { name: "", category: "Básicos", type: "unit", price: "", stock: "", unit: "pza", barcode: "", img: "", minStock: 6 }
+  );
   const [uploading, setUploading] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [barcodeFlash, setBarcodeFlash] = useState(false);
@@ -558,7 +562,7 @@ function ProductModal({ product, onSave, onClose }) {
       setTimeout(() => setBarcodeFlash(false), 900);
       // Auto-save when physical reader fills the last field and form is ready
       if (wasPhysical && form.name && form.price) {
-        onSave({ ...form, price: parseFloat(form.price), stock: parseFloat(form.stock) || 0 });
+        onSave({ ...form, price: parseFloat(form.price), stock: parseFloat(form.stock) || 0, minStock: parseInt(form.minStock) || 6 });
       }
     } else if (e.key.length === 1) {
       const gap = now - lastKeyTime.current;
