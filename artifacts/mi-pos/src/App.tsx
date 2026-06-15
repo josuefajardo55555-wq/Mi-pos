@@ -424,23 +424,29 @@ function PayModal({ total, onConfirm, onClose }) {
 
 // ─── CameraScanner ────────────────────────────────────────────────────────────
 // Primary:  native BarcodeDetector (Chrome 83+, Edge 83+, Android Chrome)
-// Fallback: ZXing @zxing/library (all modern browsers, loaded from CDN)
+// Fallback: html5-qrcode (bundles ZXing, works on all modern browsers)
+// If both fail: shows a clear error message — never crashes the app.
 function CameraScanner({ onCode, onClose }) {
   const [status, setStatus]     = useState("Iniciando cámara…");
-  const [engine, setEngine]     = useState("");   // "native" | "zxing"
   const [error, setError]       = useState("");
   const [detected, setDetected] = useState("");
-  const videoRef  = useRef(null);
-  const stopRef   = useRef(null);   // teardown fn for whichever engine runs
-  const activeRef = useRef(true);
+  const videoRef    = useRef(null);
+  const h5scanRef   = useRef(null);   // html5-qrcode instance
+  const stopRef     = useRef(null);   // teardown fn for native path
+  const activeRef   = useRef(true);
+  const SCANNER_ID  = "mi-pos-h5qr";
 
   useEffect(() => {
     activeRef.current = true;
 
-    // ── helpers ──────────────────────────────────────────────────────────────
+    // ── teardown ──────────────────────────────────────────────────────────────
     const stopAll = () => {
       activeRef.current = false;
       try { stopRef.current?.(); } catch (_) {}
+      if (h5scanRef.current) {
+        try { h5scanRef.current.stop().catch(() => {}); } catch (_) {}
+        h5scanRef.current = null;
+      }
     };
 
     const confirmCode = (code) => {
@@ -448,53 +454,50 @@ function CameraScanner({ onCode, onClose }) {
       stopAll();
       setDetected(code);
       setStatus(`✓ ${code}`);
-      setTimeout(() => onCode(code), 350);
-    };
-
-    // Returns a camera stream or throws with { kind }
-    const getCameraStream = async () => {
-      if (!navigator.mediaDevices?.getUserMedia)
-        throw Object.assign(new Error("Cámara no disponible en este navegador."), { kind: "NO_CAMERA" });
-      try {
-        return await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
-          audio: false,
-        });
-      } catch (e) {
-        const n = e?.name || "";
-        if (n === "NotAllowedError" || n === "PermissionDeniedError")
-          throw Object.assign(
-            new Error("Permiso de cámara denegado. Habilitá la cámara en la configuración del navegador."),
-            { kind: "PERMISSION" }
-          );
-        throw Object.assign(
-          new Error(`No se pudo acceder a la cámara (${n || e?.message || "error desconocido"}).`),
-          { kind: "CAMERA_ERR" }
-        );
-      }
+      setTimeout(() => onCode(code), 400);
     };
 
     // ── path 1: native BarcodeDetector ───────────────────────────────────────
     const tryNative = async () => {
-      // getSupportedFormats can throw if the API is partially implemented
+      // getSupportedFormats can throw on partial implementations → fall through
       const supported = await window.BarcodeDetector.getSupportedFormats();
       const want = ["ean_13", "ean_8", "code_128", "code_39", "upc_a", "upc_e"];
       const formats = want.filter(f => supported.includes(f));
-      if (!formats.length) throw new Error("no_formats");
+      if (!formats.length) throw new Error("no_supported_formats");
 
       const detector = new window.BarcodeDetector({ formats });
-      const stream   = await getCameraStream();
+
+      const stream = await (async () => {
+        if (!navigator.mediaDevices?.getUserMedia) throw Object.assign(new Error("Sin API de cámara."), { kind: "NO_CAMERA" });
+        try {
+          return await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
+            audio: false,
+          });
+        } catch (e) {
+          const n = e?.name || "";
+          if (n === "NotAllowedError" || n === "PermissionDeniedError")
+            throw Object.assign(new Error("Permiso de cámara denegado. Habilitá la cámara en el navegador."), { kind: "PERMISSION" });
+          throw Object.assign(new Error(`No se pudo acceder a la cámara (${n || e?.message}).`), { kind: "CAMERA_ERR" });
+        }
+      })();
 
       if (!activeRef.current) { stream.getTracks().forEach(t => t.stop()); return; }
 
-      const video = videoRef.current;
-      if (!video) { stream.getTracks().forEach(t => t.stop()); return; }
-
+      // Create video element programmatically (avoids ref timing issues)
+      const container = document.getElementById(SCANNER_ID);
+      if (!container) { stream.getTracks().forEach(t => t.stop()); return; }
+      const video = document.createElement("video");
+      video.muted = true; video.playsInline = true; video.autoplay = true;
+      video.style.cssText = "width:100%;border-radius:10px;display:block;background:#111;min-height:200px;";
+      container.appendChild(video);
       video.srcObject = stream;
-      try { await video.play(); } catch (_) {}   // play() rejection is non-fatal
+      try { await video.play(); } catch (_) {}
 
-      stopRef.current = () => stream.getTracks().forEach(t => t.stop());
-      setEngine("native");
+      stopRef.current = () => {
+        stream.getTracks().forEach(t => t.stop());
+        try { container.removeChild(video); } catch (_) {}
+      };
       setStatus("Apuntá al código de barras");
 
       const recent = [];
@@ -505,9 +508,7 @@ function CameraScanner({ onCode, onClose }) {
           for (const r of results) {
             if (!r.rawValue) continue;
             recent.push(r.rawValue);
-            if (recent.length >= 2 && recent.at(-1) === recent.at(-2)) {
-              confirmCode(r.rawValue); return;
-            }
+            if (recent.length >= 2 && recent.at(-1) === recent.at(-2)) { confirmCode(r.rawValue); return; }
           }
         } catch (_) {}
         if (activeRef.current) requestAnimationFrame(loop);
@@ -515,57 +516,57 @@ function CameraScanner({ onCode, onClose }) {
       requestAnimationFrame(loop);
     };
 
-    // ── path 2: ZXing fallback ────────────────────────────────────────────────
-    const loadZXingScript = () => new Promise((resolve, reject) => {
-      if (window.ZXing) { resolve(); return; }
-      const s = document.createElement("script");
-      s.src = "https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js";
-      s.onload  = resolve;
-      s.onerror = () => reject(Object.assign(new Error("No se pudo cargar ZXing (sin conexión)."), { kind: "CDN" }));
-      document.head.appendChild(s);
-    });
-
-    const tryZXing = async () => {
-      await loadZXingScript();
+    // ── path 2: html5-qrcode fallback ─────────────────────────────────────────
+    // Bundles ZXing internally — works on Firefox, Safari, older Android, etc.
+    const tryHtml5Qrcode = async () => {
+      if (!window.Html5Qrcode) {
+        await new Promise((resolve, reject) => {
+          const s = document.createElement("script");
+          s.src = "https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js";
+          s.onload = resolve;
+          s.onerror = () => reject(Object.assign(
+            new Error("Sin conexión para cargar el escáner. Ingresá el código manualmente."),
+            { kind: "CDN" }
+          ));
+          document.head.appendChild(s);
+        });
+      }
       if (!activeRef.current) return;
 
-      const video = videoRef.current;
-      if (!video) return;
-
-      // ZXing BrowserMultiFormatReader manages its own stream internally
-      const codeReader = new window.ZXing.BrowserMultiFormatReader();
-      stopRef.current = () => { try { codeReader.reset(); } catch (_) {} };
-
-      setEngine("zxing");
+      const scanner = new window.Html5Qrcode(SCANNER_ID);
+      h5scanRef.current = scanner;
       setStatus("Apuntá al código de barras");
 
       const recent = [];
-      // decodeFromVideoDevice(deviceId=null → default cam, videoElement, callback)
-      await codeReader.decodeFromVideoDevice(null, video, (result, _err) => {
-        if (!activeRef.current || !result) return;
-        const code = result.getText();
-        if (!code) return;
-        recent.push(code);
-        if (recent.length >= 2 && recent.at(-1) === recent.at(-2)) {
-          confirmCode(code);
-        }
-      });
+      await scanner.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: { width: 240, height: 120 }, aspectRatio: 1.33 },
+        (decodedText) => {
+          if (!activeRef.current || !decodedText) return;
+          recent.push(decodedText);
+          if (recent.length >= 2 && recent.at(-1) === recent.at(-2)) confirmCode(decodedText);
+        },
+        () => {} // per-frame decode error — ignore
+      );
     };
 
-    // ── main entry: native → ZXing ───────────────────────────────────────────
+    // ── main: native → html5-qrcode → error ──────────────────────────────────
     const start = async () => {
       if (typeof window.BarcodeDetector !== "undefined") {
-        try { await tryNative(); return; } catch (_) { /* fall through */ }
+        try { await tryNative(); return; } catch (e) {
+          // Only re-throw permission/camera errors; other errors fall to html5-qrcode
+          if (e?.kind === "PERMISSION" || e?.kind === "NO_CAMERA") throw e;
+        }
       }
-      await tryZXing();
+      await tryHtml5Qrcode();
     };
 
     start().catch((err) => {
-      const kind = err?.kind;
-      if (kind === "PERMISSION") setError(err.message);
-      else if (kind === "NO_CAMERA") setError(err.message);
+      const kind = err?.kind || "";
+      if (kind === "PERMISSION") setError("Permiso de cámara denegado. Habilitá la cámara en el navegador.");
+      else if (kind === "NO_CAMERA") setError("No se encontró ninguna cámara en este dispositivo.");
       else if (kind === "CDN") setError(err.message);
-      else setError(err?.message || "No se pudo iniciar la cámara. Ingresá el código manualmente.");
+      else setError("Escáner no disponible. Ingresá el código manualmente.");
     });
 
     return stopAll;
@@ -575,22 +576,15 @@ function CameraScanner({ onCode, onClose }) {
     <div className="scanner-overlay" onClick={onClose}>
       <div className="scanner-box" onClick={e => e.stopPropagation()}>
         <h2>📷 Escanear código de barras</h2>
-        <p style={{ fontSize: 11, color: "#6b7280", marginBottom: 8 }}>
-          EAN-13 · EAN-8 · Code-128 · UPC{engine === "zxing" ? " · ZXing" : engine === "native" ? " · Nativo" : ""}
-        </p>
+        <p style={{ fontSize: 11, color: "#6b7280", marginBottom: 8 }}>EAN-13 · EAN-8 · Code-128 · UPC · QR</p>
         {error ? (
           <div style={{ background: "#ff6b6b18", border: "1px solid #ff6b6b55", borderRadius: 10, padding: "14px 12px", fontSize: 13, color: "#ff9999", marginBottom: 10, lineHeight: 1.6 }}>
             ⚠️ {error}
           </div>
         ) : (
           <div style={{ position: "relative" }}>
-            <video
-              ref={videoRef}
-              muted
-              playsInline
-              autoPlay
-              style={{ width: "100%", borderRadius: 10, display: "block", background: "#111", minHeight: 200 }}
-            />
+            {/* Container used by both native (video injected programmatically) and html5-qrcode */}
+            <div id={SCANNER_ID} style={{ width: "100%", borderRadius: 10, overflow: "hidden", minHeight: 200, background: "#111" }} />
             {!detected && <div className="quagga-aim"><div className="quagga-aim-line" /></div>}
           </div>
         )}
