@@ -142,6 +142,20 @@ const css = `
   .scan-status.found { color: #00c896; font-weight: 600; }
   .scan-status.notfound { color: #ff6b6b; }
   .scan-manual input { width: 100%; background: #252b3b; border: 1px solid #3a4158; border-radius: 8px; padding: 9px 11px; color: #e8eaf0; font-size: 14px; outline: none; font-family: monospace; margin-top: 8px; }
+  /* Barcode row in ProductModal */
+  .barcode-row { display: flex; gap: 6px; align-items: center; }
+  .barcode-row .modal-input { flex: 1; min-width: 0; }
+  .barcode-cam-btn { flex-shrink: 0; padding: 9px 12px; background: #1e3a2f; border: 1px solid #00c896; border-radius: 8px; color: #00c896; font-size: 18px; cursor: pointer; line-height: 1; transition: all .15s; }
+  .barcode-cam-btn:hover { background: #00c896; color: #1a1f2e; }
+  .barcode-scanned { border-color: #00c896 !important; box-shadow: 0 0 0 2px rgba(0,200,150,.25) !important; }
+  .barcode-hint { font-size: 10px; color: #6b7280; margin-top: 4px; }
+  /* Quagga scanner viewport */
+  #quagga-viewport { width: 100%; border-radius: 10px; overflow: hidden; background: #000; min-height: 200px; position: relative; }
+  #quagga-viewport video { width: 100%; display: block; border-radius: 10px; }
+  #quagga-viewport canvas.drawingBuffer { position: absolute; top: 0; left: 0; width: 100% !important; height: 100% !important; border-radius: 10px; }
+  .quagga-aim { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; z-index: 10; }
+  .quagga-aim-line { width: 70%; height: 2px; background: rgba(0,200,150,.8); box-shadow: 0 0 10px rgba(0,200,150,.7); animation: scan-line 2s ease-in-out infinite; }
+  @keyframes scan-line { 0%,100%{transform:translateY(-35px)} 50%{transform:translateY(35px)} }
   .success-icon { font-size: 44px; text-align: center; margin-bottom: 10px; }
   .success-details { background: #252b3b; border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
   .success-row { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 3px; }
@@ -410,12 +424,109 @@ function PayModal({ total, onConfirm, onClose }) {
   );
 }
 
+// ─── QuaggaProductScanner ─────────────────────────────────────────────────────
+function QuaggaProductScanner({ onCode, onClose }) {
+  const [status, setStatus] = useState("Iniciando cámara…");
+  const [error, setError] = useState("");
+  const [detected, setDetected] = useState("");
+  const quaggaStarted = useRef(false);
+
+  useEffect(() => {
+    let active = true;
+    const startQuagga = async () => {
+      if (!window.Quagga) {
+        await new Promise((resolve, reject) => {
+          const s = document.createElement("script");
+          s.src = "https://cdn.jsdelivr.net/npm/@ericblade/quagga2@1.8.4/dist/quagga.min.js";
+          s.onload = resolve;
+          s.onerror = () => reject(new Error("No se pudo cargar Quagga2"));
+          document.head.appendChild(s);
+        });
+      }
+      await new Promise((resolve, reject) => {
+        window.Quagga.init({
+          inputStream: {
+            name: "Live", type: "LiveStream",
+            target: document.getElementById("quagga-viewport"),
+            constraints: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } },
+          },
+          decoder: {
+            readers: ["ean_reader", "ean_8_reader", "code_128_reader", "code_39_reader", "upc_reader"],
+            multiple: false,
+          },
+          locate: true,
+        }, (err) => { if (err) { reject(err); return; } resolve(); });
+      });
+      if (!active) { window.Quagga.stop(); return; }
+      window.Quagga.start();
+      quaggaStarted.current = true;
+      setStatus("Apuntá al código de barras");
+
+      const recentCodes = [];
+      window.Quagga.onDetected((result) => {
+        if (!active) return;
+        const code = result?.codeResult?.code;
+        const confidence = (result?.codeResult?.decodedCodes || [])
+          .filter(x => x.error !== undefined)
+          .reduce((acc, x) => acc + (1 - x.error), 0);
+        if (!code || confidence < 1.5) return;
+        recentCodes.push(code);
+        if (recentCodes.length >= 2 && recentCodes[recentCodes.length - 1] === recentCodes[recentCodes.length - 2]) {
+          active = false;
+          setDetected(code);
+          setStatus(`✓ ${code}`);
+          window.Quagga.stop();
+          quaggaStarted.current = false;
+          setTimeout(() => onCode(code), 350);
+        }
+      });
+    };
+
+    startQuagga().catch((err) => {
+      const msg = err?.message || "";
+      setError(msg.includes("getUserMedia") || msg.includes("camera") || err?.name === "NotAllowedError"
+        ? "Permiso de cámara denegado. Activalo en el navegador e intentá de nuevo."
+        : "Cámara no disponible. Ingresá el código manualmente.");
+    });
+
+    return () => {
+      active = false;
+      if (quaggaStarted.current) { window.Quagga?.stop(); quaggaStarted.current = false; }
+    };
+  }, []);
+
+  return (
+    <div className="scanner-overlay" onClick={onClose}>
+      <div className="scanner-box" onClick={e => e.stopPropagation()}>
+        <h2>📷 Escanear código de barras</h2>
+        <p>Quagga2 — EAN-13, EAN-8, Code-128, UPC</p>
+        {error ? (
+          <div style={{ background: "#ff6b6b22", border: "1px solid #ff6b6b44", borderRadius: 8, padding: "10px 12px", fontSize: 12, color: "#ff6b6b", marginBottom: 8 }}>{error}</div>
+        ) : (
+          <div style={{ position: "relative" }}>
+            <div id="quagga-viewport" />
+            {!detected && <div className="quagga-aim"><div className="quagga-aim-line" /></div>}
+          </div>
+        )}
+        <div className={`scan-status${detected ? " found" : ""}`} style={{ marginBottom: 4 }}>{status}</div>
+        <div className="modal-actions" style={{ marginTop: 10 }}>
+          <button className="btn-secondary" style={{ flex: 1 }} onClick={onClose}>Cancelar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── ProductModal ─────────────────────────────────────────────────────────────
 function ProductModal({ product, onSave, onClose }) {
   const [form, setForm] = useState(product || { name: "", category: "Básicos", type: "unit", price: "", stock: "", unit: "pza", barcode: "", img: "" });
   const [uploading, setUploading] = useState(false);
+  const [showScanner, setShowScanner] = useState(false);
+  const [barcodeFlash, setBarcodeFlash] = useState(false);
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const fileRef = useRef();
+  const lastKeyTime = useRef(0);
+  const physicalBuf = useRef("");
 
   const handleImg = async (e) => {
     const file = e.target.files[0];
@@ -429,14 +540,43 @@ function ProductModal({ product, onSave, onClose }) {
         const url = await getDownloadURL(imgRef);
         set("img", url);
       } catch {
-        set("img", reader.result); // fallback to base64
+        set("img", reader.result);
       }
       setUploading(false);
     };
     reader.readAsDataURL(file);
   };
 
+  // Physical barcode reader: chars arrive < 60 ms apart, ends with Enter
+  const handleBarcodeKeyDown = (e) => {
+    const now = Date.now();
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const wasPhysical = physicalBuf.current.length > 3;
+      physicalBuf.current = "";
+      setBarcodeFlash(true);
+      setTimeout(() => setBarcodeFlash(false), 900);
+      // Auto-save when physical reader fills the last field and form is ready
+      if (wasPhysical && form.name && form.price) {
+        onSave({ ...form, price: parseFloat(form.price), stock: parseFloat(form.stock) || 0 });
+      }
+    } else if (e.key.length === 1) {
+      const gap = now - lastKeyTime.current;
+      physicalBuf.current = gap < 60 ? physicalBuf.current + e.key : e.key;
+      lastKeyTime.current = now;
+    }
+  };
+
+  const handleCameraCode = (code) => {
+    set("barcode", code);
+    setShowScanner(false);
+    setBarcodeFlash(true);
+    setTimeout(() => setBarcodeFlash(false), 1200);
+  };
+
   return (
+    <>
+    {showScanner && <QuaggaProductScanner onCode={handleCameraCode} onClose={() => setShowScanner(false)} />}
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()}>
         <h2>{product ? "Editar producto" : "Nuevo producto"}</h2>
@@ -480,7 +620,23 @@ function ProductModal({ product, onSave, onClose }) {
         </div>
         <div className="modal-section">
           <div className="modal-label">Código de barras</div>
-          <input className="modal-input" value={form.barcode} onChange={e => set("barcode", e.target.value)} placeholder="Ej: 7790070010015" style={{ fontFamily: "monospace" }} />
+          <div className="barcode-row">
+            <input
+              className={`modal-input${barcodeFlash ? " barcode-scanned" : ""}`}
+              value={form.barcode}
+              onChange={e => set("barcode", e.target.value)}
+              onKeyDown={handleBarcodeKeyDown}
+              placeholder="Escaneá o ingresá el código"
+              style={{ fontFamily: "monospace" }}
+              autoComplete="off"
+            />
+            <button className="barcode-cam-btn" type="button" title="Escanear con cámara" onClick={() => setShowScanner(true)}>📷</button>
+          </div>
+          <div className="barcode-hint">
+            {form.name && form.price
+              ? "Lector físico: apuntá y el producto se guarda automáticamente al escanear"
+              : "Completá nombre y precio primero para guardar automáticamente con el lector"}
+          </div>
         </div>
         <div className="modal-actions">
           <button className="btn-secondary" onClick={onClose}>Cancelar</button>
@@ -490,6 +646,7 @@ function ProductModal({ product, onSave, onClose }) {
         </div>
       </div>
     </div>
+    </>
   );
 }
 
