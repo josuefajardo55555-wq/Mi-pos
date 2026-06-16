@@ -297,53 +297,94 @@ function LoginScreen({ firebaseError }) {
 
 // ─── Scanner ──────────────────────────────────────────────────────────────────
 function ScannerModal({ products, onFound, onClose }) {
-  const [status, setStatus] = useState("Iniciando cámara...");
+  const [status, setStatus]     = useState("Iniciando cámara...");
   const [statusType, setStatusType] = useState("");
   const [manualCode, setManualCode] = useState("");
-  const html5QrRef = useRef(null);
+  const html5QrRef  = useRef(null);
+  const startedRef  = useRef(false);
+  // aliveRef gates the one-time onFound dispatch — prevents duplicate calls
+  // when the scanner fires the success callback multiple times at 10fps.
+  const aliveRef    = useRef(true);
+  // Keep latest props in refs so the scanner callback never sees stale closures.
+  const productsRef = useRef(products);
+  const onFoundRef  = useRef(onFound);
+  useEffect(() => { productsRef.current = products; }, [products]);
+  useEffect(() => { onFoundRef.current  = onFound;  }, [onFound]);
 
-  useEffect(() => {
-    const loadAndStart = async () => {
-      if (!window.Html5Qrcode) {
-        await new Promise((resolve, reject) => {
-          const script = document.createElement("script");
-          script.src = "https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js";
-          script.onload = resolve; script.onerror = reject;
-          document.head.appendChild(script);
-        });
-      }
-      try {
-        const scanner = new window.Html5Qrcode("scanner-viewport");
-        html5QrRef.current = scanner;
-        await scanner.start({ facingMode: "environment" }, { fps: 10, qrbox: { width: 250, height: 120 } },
-          (code) => handleCode(code), () => {});
-        setStatus("Apuntá al código de barras");
-      } catch {
-        setStatus("Cámara no disponible. Ingresá el código manualmente.");
-        setStatusType("notfound");
-      }
-    };
-    loadAndStart();
-    return () => { if (html5QrRef.current) html5QrRef.current.stop().catch(() => {}); };
-  }, []);
-
+  // handleCode is stable (no deps) — all dynamic data accessed via refs.
   const handleCode = (code) => {
-    const found = products.find(p => p.barcode === code);
+    if (!code) return;
+    const found = productsRef.current.find(p => p.barcode === code);
     if (found) {
+      if (!aliveRef.current) return; // already dispatched — ignore duplicates
+      aliveRef.current  = false;     // lock: only one dispatch ever
+      startedRef.current = false;
       setStatus(`✓ ${found.name}`);
       setStatusType("found");
-      setTimeout(() => { if (html5QrRef.current) html5QrRef.current.stop().catch(() => {}); onFound(found); }, 500);
+      if (html5QrRef.current) html5QrRef.current.stop().catch(() => {});
+      // Short delay so user sees the confirmation before the modal closes
+      setTimeout(() => onFoundRef.current(found), 500);
     } else {
-      setStatus(`Código ${code} no registrado`);
+      setStatus(`Código ${code} no registrado. Intentá de nuevo.`);
       setStatusType("notfound");
     }
   };
+
+  useEffect(() => {
+    aliveRef.current   = true;
+    startedRef.current = false;
+
+    const init = async () => {
+      // Use the bundled npm package — no CDN script injection, no timing races
+      const { Html5Qrcode } = await import("html5-qrcode");
+      if (!aliveRef.current) return;
+
+      // div#scanner-viewport is always in DOM (not conditional) — safe to init here
+      const scanner = new Html5Qrcode("scanner-viewport", { verbose: false });
+      html5QrRef.current = scanner;
+
+      await scanner.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: { width: 250, height: 120 } },
+        (code) => handleCode(code),
+        () => {} // per-frame decode error — expected for non-barcode frames
+      );
+
+      startedRef.current = true;
+      if (!aliveRef.current) {
+        // Unmounted while start() was in flight — stop immediately
+        scanner.stop().catch(() => {});
+        return;
+      }
+      setStatus("Apuntá el código de barras a la cámara");
+    };
+
+    init().catch((err) => {
+      if (!aliveRef.current) return;
+      const m = err?.message || String(err);
+      if (/NotAllowed|PermissionDenied/i.test(m)) {
+        setStatus("Permiso de cámara denegado. Usá el ingreso manual.");
+      } else {
+        setStatus("Cámara no disponible. Ingresá el código manualmente.");
+      }
+      setStatusType("notfound");
+    });
+
+    return () => {
+      aliveRef.current = false;
+      if (html5QrRef.current && startedRef.current) {
+        startedRef.current = false;
+        html5QrRef.current.stop().catch(() => {});
+      }
+    };
+  }, []);
 
   return (
     <div className="scanner-overlay" onClick={onClose}>
       <div className="scanner-box" onClick={e => e.stopPropagation()}>
         <h2>📷 Escanear código</h2>
         <p>Cámara o ingreso manual</p>
+        {/* div must always be in DOM — html5-qrcode accesses it by ID on init */}
         <div id="scanner-viewport" />
         <div className={`scan-status ${statusType}`}>{status}</div>
         <div className="scan-manual">
