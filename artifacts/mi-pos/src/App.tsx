@@ -618,7 +618,8 @@ function ProductModal({ product, onSave, onClose }) {
   const [showScanner, setShowScanner] = useState(false);
   const [barcodeFlash, setBarcodeFlash] = useState(false);
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
-  const fileRef = useRef();
+  const fileRef   = useRef();
+  const cameraRef = useRef();
   const lastKeyTime = useRef(0);
   const physicalBuf = useRef("");
 
@@ -676,12 +677,42 @@ function ProductModal({ product, onSave, onClose }) {
         <h2>{product ? "Editar producto" : "Nuevo producto"}</h2>
         <div className="modal-section">
           <div className="modal-label">Foto</div>
+          {/* Gallery picker — no capture attribute, opens file browser / gallery */}
           <input type="file" accept="image/*" ref={fileRef} style={{ display: "none" }} onChange={handleImg} />
-          {form.img ? <img src={form.img} className="img-preview" onClick={() => fileRef.current.click()} alt="" /> :
-            <div className="img-upload" onClick={() => fileRef.current.click()}>
-              <span style={{ fontSize: 22 }}>{uploading ? "⏳" : "📷"}</span>
-              <span>{uploading ? "Subiendo..." : "Tocá para agregar foto"}</span>
-            </div>}
+          {/* Camera picker — capture="environment" opens rear camera directly on mobile */}
+          <input type="file" accept="image/*" capture="environment" ref={cameraRef} style={{ display: "none" }} onChange={handleImg} />
+
+          {form.img ? (
+            <div>
+              <img src={form.img} className="img-preview" alt="" style={{ marginBottom: 8 }} />
+              <div style={{ display: "flex", gap: 8 }}>
+                <button type="button" onClick={() => fileRef.current.click()}
+                  style={{ flex: 1, background: "#252b3b", border: "1px solid #3a4158", borderRadius: 8, color: "#9ca3af", fontSize: 12, padding: "7px 0", cursor: "pointer" }}>
+                  🖼️ Galería
+                </button>
+                <button type="button" onClick={() => cameraRef.current.click()}
+                  style={{ flex: 1, background: "#252b3b", border: "1px solid #3a4158", borderRadius: 8, color: "#9ca3af", fontSize: 12, padding: "7px 0", cursor: "pointer" }}>
+                  📷 Cámara
+                </button>
+              </div>
+            </div>
+          ) : uploading ? (
+            <div className="img-upload" style={{ cursor: "default" }}>
+              <span style={{ fontSize: 22 }}>⏳</span>
+              <span>Subiendo...</span>
+            </div>
+          ) : (
+            <div style={{ display: "flex", gap: 8 }}>
+              <div className="img-upload" style={{ flex: 1 }} onClick={() => fileRef.current.click()}>
+                <span style={{ fontSize: 20 }}>🖼️</span>
+                <span>Galería</span>
+              </div>
+              <div className="img-upload" style={{ flex: 1 }} onClick={() => cameraRef.current.click()}>
+                <span style={{ fontSize: 20 }}>📷</span>
+                <span>Cámara</span>
+              </div>
+            </div>
+          )}
         </div>
         <div className="modal-section">
           <div className="modal-label">Nombre</div>
