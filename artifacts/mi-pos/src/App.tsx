@@ -78,6 +78,10 @@ const css = `
   .product-card { background: #252b3b; border: 1px solid #3a4158; border-radius: 10px; padding: 10px; cursor: pointer; transition: all .15s; }
   .product-card:hover { border-color: #00c896; }
   .product-card.low-stock { border-color: #ff6b6b33; }
+  .product-card.no-stock-flash { border-color: #ff4444 !important; background: #3b1818 !important; animation: no-stock-pulse 0.35s ease 2; }
+  @keyframes no-stock-pulse { 0%,100%{opacity:1} 50%{opacity:0.55} }
+  .no-stock-toast { position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); background: #b91c1c; color: #fff; border-radius: 14px; padding: 13px 22px; font-size: 14px; font-weight: 600; z-index: 9999; white-space: nowrap; box-shadow: 0 6px 28px rgba(0,0,0,0.55); display: flex; align-items: center; gap: 10px; animation: toast-in 0.2s ease; pointer-events: none; }
+  @keyframes toast-in { from{opacity:0;transform:translateX(-50%) translateY(12px)} to{opacity:1;transform:translateX(-50%) translateY(0)} }
   .prod-img { width: 100%; height: 65px; border-radius: 6px; margin-bottom: 6px; background: #1e2438; display: flex; align-items: center; justify-content: center; font-size: 26px; overflow: hidden; }
   .prod-img img { width: 100%; height: 65px; object-fit: cover; border-radius: 6px; }
   .product-name { font-size: 11px; font-weight: 600; margin-bottom: 2px; line-height: 1.3; }
@@ -778,6 +782,9 @@ function SaleView({ products, userProfile }) {
   const [successModal, setSuccessModal] = useState(null);
   const [scannerOpen, setScannerOpen] = useState(false);
   const [lastScanned, setLastScanned] = useState(null);
+  const [noStockId, setNoStockId]     = useState(null);   // product id flashing red
+  const [stockToast, setStockToast]   = useState(null);   // product name shown in toast
+  const noStockTimer = useRef(null);
   const barcodeBuffer = useRef("");
   const barcodeTimer = useRef(null);
 
@@ -817,7 +824,17 @@ function SaleView({ products, userProfile }) {
     setTimeout(() => setLastScanned(null), 1500);
   };
 
-  const handleProductClick = (p) => { if (p.type === "kg") setKgModal(p); else addToCart(p, 1); };
+  const handleProductClick = (p) => {
+    if (p.stock <= 0) {
+      // Flash the card red and show toast — do NOT add to cart
+      clearTimeout(noStockTimer.current);
+      setNoStockId(p.id);
+      setStockToast(p.name);
+      noStockTimer.current = setTimeout(() => { setNoStockId(null); setStockToast(null); }, 2400);
+      return;
+    }
+    if (p.type === "kg") setKgModal(p); else addToCart(p, 1);
+  };
   const updateQty = (id, val) => { const n = parseFloat(val); if (isNaN(n) || n <= 0) return setCart(c => c.filter(i => i.id !== id)); setCart(c => c.map(i => i.id === id ? { ...i, qty: n } : i)); };
   const total = cart.reduce((s, i) => s + i.price * i.qty, 0);
 
@@ -839,6 +856,12 @@ function SaleView({ products, userProfile }) {
   return (
     <div className="content sale-content">
       {scannerOpen && <ScannerModal products={products} onFound={p => { setScannerOpen(false); handleProductClick(p); }} onClose={() => setScannerOpen(false)} />}
+      {stockToast && (
+        <div className="no-stock-toast">
+          <span>🚫</span>
+          <span>Sin stock · {stockToast}</span>
+        </div>
+      )}
       {kgModal && <KgModal product={kgModal} onConfirm={kg => { addToCart(kgModal, kg); setKgModal(null); }} onClose={() => setKgModal(null)} />}
       {payModal && <PayModal total={total} onConfirm={handlePay} onClose={() => setPayModal(false)} />}
       {successModal && <SuccessModal sale={successModal} onClose={() => setSuccessModal(null)} />}
@@ -850,7 +873,7 @@ function SaleView({ products, userProfile }) {
         <div className="categories">{CATEGORIES.map(c => <button key={c} className={`cat-btn${cat === c ? " active" : ""}`} onClick={() => setCat(c)}>{c}</button>)}</div>
         <div className="grid">
           {filtered.map(p => (
-            <div key={p.id} className={`product-card${p.stock < (p.minStock ?? 6) ? " low-stock" : ""}`} onClick={() => handleProductClick(p)}>
+            <div key={p.id} className={`product-card${p.stock < (p.minStock ?? 6) ? " low-stock" : ""}${noStockId === p.id ? " no-stock-flash" : ""}`} onClick={() => handleProductClick(p)}>
               <div className="prod-img">{p.img ? <img src={p.img} alt="" /> : getCatEmoji(p.category)}</div>
               <span className={`type-badge ${p.type === "kg" ? "type-kg" : "type-unit"}`}>{p.type === "kg" ? "⚖️ kg" : "📦 unid"}</span>
               <div className="product-name">{p.name}</div>
