@@ -949,17 +949,125 @@ function InventoryView({ products, userProfile }) {
 
 // ─── HistoryView ──────────────────────────────────────────────────────────────
 function HistoryView({ sales }) {
+  // YYYY-MM-DD in local time — used as the canonical date key for filtering
+  const todayStr = new Date().toLocaleDateString("en-CA");
+  const [filterDate, setFilterDate] = useState(todayStr);
+
+  const getSaleDate = (sale) =>
+    sale.date?.toDate ? sale.date.toDate().toLocaleDateString("en-CA") : null;
+
+  // Today's stats — real-time because `sales` comes from onSnapshot in the parent
+  const todaySales  = sales.filter(s => getSaleDate(s) === todayStr);
+  const todayTotal  = todaySales.reduce((sum, s) => sum + s.total, 0);
+  const todayTxns   = todaySales.length;
+
+  // Filtered list for the date picker
+  const isToday        = filterDate === todayStr;
+  const filteredSales  = isToday ? todaySales : sales.filter(s => getSaleDate(s) === filterDate);
+  const filteredTotal  = filteredSales.reduce((sum, s) => sum + s.total, 0);
+
+  // Human-readable date in Spanish from a YYYY-MM-DD string
+  const fmtLabel = (str) => {
+    const [y, m, d] = str.split("-").map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString("es-AR", {
+      weekday: "long", day: "numeric", month: "long",
+    });
+  };
+
   return (
     <div className="content">
       <div className="hist-area">
-        {sales.length === 0 && <div style={{ color: "#6b7280", textAlign: "center", padding: 40 }}>Aún no hay ventas</div>}
-        {sales.map(sale => (
-          <div key={sale.id} className="hist-item">
-            <div className="hist-header"><span className="hist-id">{sale.id?.slice(-8)}</span><span className="hist-total">{fmt(sale.total)}</span></div>
-            <div className="hist-meta">📅 {sale.date?.toDate ? sale.date.toDate().toLocaleString("es-AR") : "—"} · 💳 {sale.method} · 👤 {sale.cashier}</div>
-            <div className="hist-products">{sale.items?.map(i => `${i.name} × ${i.qty} ${i.unit}`).join(" · ")}</div>
+
+        {/* ── TODAY BANNER — always visible, always real-time ── */}
+        <div style={{
+          background: "linear-gradient(135deg, #004d38 0%, #006b4f 100%)",
+          border: "1px solid #00c896",
+          borderRadius: 12,
+          padding: "14px 16px",
+          marginBottom: 14,
+        }}>
+          <div style={{ fontSize: 11, color: "#00c896", fontWeight: 600, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>
+            📅 Hoy · {fmtLabel(todayStr)}
           </div>
-        ))}
+          <div style={{ fontSize: 30, fontWeight: 700, fontFamily: "monospace", color: "#fff", lineHeight: 1.1, marginBottom: 4 }}>
+            {fmt(todayTotal)}
+          </div>
+          <div style={{ fontSize: 12, color: "#6ee7b7" }}>
+            {todayTxns === 0
+              ? "Sin ventas aún"
+              : `${todayTxns} ${todayTxns === 1 ? "venta" : "ventas"} · Ticket prom. ${fmt(todayTotal / todayTxns)}`}
+          </div>
+        </div>
+
+        {/* ── DATE FILTER ── */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center" }}>
+          <div style={{ flex: 1, background: "#252b3b", border: "1px solid #3a4158", borderRadius: 8, padding: "0 10px", display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 14 }}>📆</span>
+            <input
+              type="date"
+              value={filterDate}
+              max={todayStr}
+              onChange={e => e.target.value && setFilterDate(e.target.value)}
+              style={{ background: "transparent", border: "none", color: "#e8eaf0", fontSize: 13, padding: "8px 0", outline: "none", flex: 1, colorScheme: "dark" }}
+            />
+          </div>
+          {!isToday && (
+            <button
+              onClick={() => setFilterDate(todayStr)}
+              style={{ background: "#3a4158", border: "1px solid #4a5168", borderRadius: 8, color: "#e8eaf0", fontSize: 12, padding: "8px 12px", cursor: "pointer", whiteSpace: "nowrap" }}
+            >
+              Hoy
+            </button>
+          )}
+        </div>
+
+        {/* ── SELECTED DATE SUMMARY (shown only when filtering a past day) ── */}
+        {!isToday && (
+          <div style={{
+            background: "#252b3b", border: "1px solid #3a4158",
+            borderRadius: 10, padding: "12px 14px", marginBottom: 12,
+            display: "flex", justifyContent: "space-between", alignItems: "center",
+          }}>
+            <div>
+              <div style={{ fontSize: 12, color: "#e8eaf0", fontWeight: 600, textTransform: "capitalize" }}>
+                {fmtLabel(filterDate)}
+              </div>
+              <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>
+                {filteredSales.length === 0
+                  ? "Sin ventas"
+                  : `${filteredSales.length} ${filteredSales.length === 1 ? "venta" : "ventas"}`}
+              </div>
+            </div>
+            <div style={{ fontSize: 22, fontWeight: 700, fontFamily: "monospace", color: "#00c896" }}>
+              {fmt(filteredTotal)}
+            </div>
+          </div>
+        )}
+
+        {/* ── SALES LIST ── */}
+        {filteredSales.length === 0 ? (
+          <div style={{ color: "#6b7280", textAlign: "center", padding: "30px 0", fontSize: 13 }}>
+            Sin ventas para esta fecha
+          </div>
+        ) : (
+          filteredSales.map(sale => (
+            <div key={sale.id} className="hist-item">
+              <div className="hist-header">
+                <span className="hist-id">{sale.id?.slice(-8)}</span>
+                <span className="hist-total">{fmt(sale.total)}</span>
+              </div>
+              <div className="hist-meta">
+                ⏰ {sale.date?.toDate
+                  ? sale.date.toDate().toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })
+                  : "—"} · 💳 {sale.method} · 👤 {sale.cashier}
+              </div>
+              <div className="hist-products">
+                {sale.items?.map(i => `${i.name} × ${i.qty} ${i.unit}`).join(" · ")}
+              </div>
+            </div>
+          ))
+        )}
+
       </div>
     </div>
   );
