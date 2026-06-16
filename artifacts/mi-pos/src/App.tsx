@@ -192,6 +192,14 @@ const css = `
   .rep-row:last-child { border-bottom: none; }
   .bar { height: 5px; background: #3a4158; border-radius: 3px; margin-top: 3px; }
   .bar-fill { height: 5px; background: linear-gradient(90deg, #00c896, #00a87a); border-radius: 3px; }
+  /* Bluetooth / Print */
+  .print-btn { width:100%; padding:11px 14px; background:#252b3b; border:1.5px solid #3a4158; border-radius:8px; color:#e8eaf0; font-size:13px; font-weight:600; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:7px; font-family:'Inter',sans-serif; transition:background 0.15s,border-color 0.15s; }
+  .print-btn:hover:not(:disabled) { background:#2d3548; border-color:#60a5fa; }
+  .print-btn:disabled { opacity:0.55; cursor:default; }
+  .print-btn.bt-connected { border-color:#00c896; color:#00c896; }
+  .bt-error { margin-top:6px; padding:8px 10px; background:#2d1515; border:1px solid #7f1d1d; border-radius:8px; color:#fca5a5; font-size:11px; line-height:1.5; }
+  .print-section { background:#1e2438; border:1px solid #3a4158; border-radius:10px; padding:12px; margin-bottom:10px; }
+  .print-section h3 { font-size:12px; font-weight:600; margin-bottom:10px; color:#9ca3af; }
   /* Login */
   .login-screen { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; background: #1a1f2e; }
   .login-box { background: #1e2438; border: 1px solid #3a4158; border-radius: 20px; padding: 28px 24px; width: 100%; max-width: 380px; }
@@ -799,7 +807,147 @@ function ProductModal({ product, onSave, onClose, categories }) {
 }
 
 // ─── SuccessModal ─────────────────────────────────────────────────────────────
-function SuccessModal({ sale, onClose }) {
+// ─── ESC/POS utilities ────────────────────────────────────────────────────────
+const _ESC=0x1B,_GS=0x1D,_LF=0x0A,_PW=32;
+function escNorm(s){return String(s).normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^\x20-\x7E]/g,"?");}
+function escBytes(text){const t=escNorm(text);const b=[];for(let i=0;i<t.length;i++)b.push(t.charCodeAt(i));b.push(_LF);return b;}
+function escCenter(text){const t=escNorm(text);const pad=Math.max(0,Math.floor((_PW-t.length)/2));return escBytes(" ".repeat(pad)+t);}
+function escLR(left,right){const l=escNorm(left),r=escNorm(right);const gap=Math.max(1,_PW-l.length-r.length);return escBytes(l+" ".repeat(gap)+r);}
+function escSep(ch="-"){return escBytes(ch.repeat(_PW));}
+
+function buildTicket(sale,biz="MI POS"){
+  const now=sale.date?.toDate?sale.date.toDate():new Date();
+  const ds=now.toLocaleDateString("es-AR"),ts=now.toLocaleTimeString("es-AR",{hour:"2-digit",minute:"2-digit"});
+  const b=[_ESC,0x40,_ESC,0x61,0x01,_ESC,0x45,0x01,_GS,0x21,0x11,...escBytes(biz),_GS,0x21,0x00,_ESC,0x45,0x00,
+    ...escSep("="),...escCenter(`${ds}  ${ts}`),...escCenter(`Folio: ${(sale.id||"").slice(-8)}`),
+    ...escSep("-"),_ESC,0x61,0x00];
+  for(const item of(sale.items||[])){
+    const nm=escNorm(item.name).slice(0,17).padEnd(17);
+    const qt=`x${Number(item.qty).toFixed(item.type==="kg"?2:0)}`.padStart(5);
+    const pr=`$${Number(item.price*item.qty).toLocaleString("es-AR",{minimumFractionDigits:2,maximumFractionDigits:2})}`.padStart(8);
+    b.push(...escBytes(nm+qt+pr));
+  }
+  b.push(...escSep("-"),_ESC,0x45,0x01,...escLR("TOTAL:",fmt(sale.total)),_ESC,0x45,0x00,...escLR("Metodo:",sale.method||""));
+  if(sale.method==="Efectivo"){b.push(...escLR("Recibido:",fmt(sale.received||0)),...escLR("Vuelto:",fmt(Math.max(0,sale.change||0))));}
+  b.push(...escSep("="),_ESC,0x61,0x01,...escCenter("Gracias por su compra!"),_LF,_LF,_LF,_GS,0x56,0x41,0x10);
+  return new Uint8Array(b);
+}
+
+function buildSalesReport(sales,biz="MI POS"){
+  const today=new Date().toLocaleDateString("es-AR");
+  const ts=sales.filter(s=>{try{return(s.date?.toDate?s.date.toDate():new Date(s.date)).toLocaleDateString("es-AR")===today;}catch{return false;}});
+  const total=ts.reduce((s,v)=>s+v.total,0);
+  const b=[_ESC,0x40,_ESC,0x61,0x01,_ESC,0x45,0x01,_GS,0x21,0x11,...escBytes(biz),_GS,0x21,0x00,_ESC,0x45,0x00,
+    ...escSep("="),...escCenter("REPORTE DE VENTAS"),...escCenter(today),...escSep("="),_ESC,0x61,0x00,
+    _ESC,0x45,0x01,...escLR("Transacciones:",String(ts.length)),...escLR("Total vendido:",fmt(total)),_ESC,0x45,0x00,...escSep("-")];
+  for(const s of ts.slice(0,20)){
+    const d=s.date?.toDate?s.date.toDate():new Date(s.date);
+    b.push(...escLR(d.toLocaleTimeString("es-AR",{hour:"2-digit",minute:"2-digit"})+" "+escNorm(s.method||""),fmt(s.total)));
+  }
+  if(ts.length>20)b.push(...escBytes(`  ...y ${ts.length-20} mas`));
+  b.push(...escSep("="),_ESC,0x61,0x01,...escCenter("Mi POS"),_LF,_LF,_LF,_GS,0x56,0x41,0x10);
+  return new Uint8Array(b);
+}
+
+function buildLowStockReport(products,biz="MI POS"){
+  const low=products.filter(p=>p.stock<(p.minStock??6));
+  const b=[_ESC,0x40,_ESC,0x61,0x01,_ESC,0x45,0x01,_GS,0x21,0x11,...escBytes(biz),_GS,0x21,0x00,_ESC,0x45,0x00,
+    ...escSep("="),...escCenter("STOCK BAJO"),...escCenter(new Date().toLocaleDateString("es-AR")),...escSep("="),_ESC,0x61,0x00];
+  if(low.length===0){b.push(...escCenter("Todo en orden! :)"));}
+  else{
+    b.push(_ESC,0x45,0x01,...escBytes("Producto          Stk  Min"),_ESC,0x45,0x00,...escSep("-"));
+    for(const p of low){
+      const nm=escNorm(p.name).slice(0,18).padEnd(18);
+      b.push(...escBytes(nm+String(p.stock).padStart(4)+String(p.minStock??6).padStart(4)));
+    }
+  }
+  b.push(...escSep("="),_ESC,0x61,0x01,...escCenter("Mi POS"),_LF,_LF,_LF,_GS,0x56,0x41,0x10);
+  return new Uint8Array(b);
+}
+
+// ─── Bluetooth printer hook ────────────────────────────────────────────────────
+const BT_PROFILES=[
+  {svc:"000018f0-0000-1000-8000-00805f9b34fb",chr:"00002af1-0000-1000-8000-00805f9b34fb"},
+  {svc:"e7810a71-73ae-499d-8c15-faa9aef0c3f2",chr:"bef8d6c9-9c21-4c9e-b632-bd58c1009f9f"},
+  {svc:"49535343-fe7d-4ae5-8fa9-9fafd205e455",chr:"49535343-8841-43f4-a8d4-ecbe34729bb3"},
+  {svc:"6e400001-b5a3-f393-e0a9-e50e24dcca9e",chr:"6e400002-b5a3-f393-e0a9-e50e24dcca9e"},
+];
+
+function useBTPrinter(){
+  const [status,setStatus]=useState("idle"); // idle|connecting|connected|printing|error
+  const [errMsg,setErrMsg]=useState("");
+  const [devName,setDevName]=useState("");
+  const charRef=useRef(null);
+  const devRef=useRef(null);
+
+  const connect=async()=>{
+    if(!navigator?.bluetooth){setStatus("error");setErrMsg("Web Bluetooth no disponible. Usa Chrome en Android.");return false;}
+    setStatus("connecting");setErrMsg("");
+    try{
+      const dev=await navigator.bluetooth.requestDevice({acceptAllDevices:true,optionalServices:BT_PROFILES.map(p=>p.svc)});
+      devRef.current=dev;setDevName(dev.name||"Impresora");
+      dev.addEventListener("gattserverdisconnected",()=>{charRef.current=null;setStatus("idle");setDevName("");});
+      const server=await dev.gatt.connect();
+      let chr=null;
+      for(const prof of BT_PROFILES){try{const svc=await server.getPrimaryService(prof.svc);chr=await svc.getCharacteristic(prof.chr);break;}catch{}}
+      if(!chr){
+        try{
+          const svcs=await server.getPrimaryServices();
+          outer:for(const svc of svcs){const chars=await svc.getCharacteristics();for(const c of chars){if(c.properties.writeWithoutResponse||c.properties.write){chr=c;break outer;}}}
+        }catch{}
+      }
+      if(!chr)throw new Error("No se encontro caracteristica de escritura. Probá con otra impresora.");
+      charRef.current=chr;setStatus("connected");return true;
+    }catch(err){
+      charRef.current=null;setDevName("");
+      if(err.name==="NotFoundError"){setStatus("idle");}
+      else{setStatus("error");setErrMsg(err.message||String(err));}
+      return false;
+    }
+  };
+
+  const disconnect=()=>{devRef.current?.gatt?.disconnect();charRef.current=null;setStatus("idle");setDevName("");};
+
+  const print=async(bytes)=>{
+    if(!charRef.current){const ok=await connect();if(!ok)return;}
+    setStatus("printing");
+    try{
+      const chr=charRef.current;
+      const noResp=chr.properties.writeWithoutResponse;
+      for(let i=0;i<bytes.length;i+=100){
+        const chunk=bytes.slice(i,i+100);
+        if(noResp&&chr.writeValueWithoutResponse)await chr.writeValueWithoutResponse(chunk);
+        else await chr.writeValue(chunk);
+        await new Promise(r=>setTimeout(r,50));
+      }
+      setStatus("connected");
+    }catch(err){setStatus("error");setErrMsg(err.message||String(err));}
+  };
+
+  return {status,errMsg,devName,connect,disconnect,print};
+}
+
+// ─── PrintBtn ──────────────────────────────────────────────────────────────────
+function PrintBtn({label,onPrint,printer}){
+  const {status,errMsg,devName}=printer;
+  const busy=status==="printing"||status==="connecting";
+  const conn=status==="connected";
+  const txt=status==="printing"?"Imprimiendo...":status==="connecting"?"Conectando...":conn?label:`📡 ${label}`;
+  return(
+    <div style={{marginBottom:8}}>
+      <button className={`print-btn${conn?" bt-connected":""}`} onClick={onPrint} disabled={busy}>
+        <span style={{fontSize:15}}>{busy?"⏳":conn?"🖨️":"📡"}</span>
+        <span>{txt}</span>
+        {conn&&devName&&<span style={{fontSize:10,opacity:0.65,marginLeft:"auto",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:80}}>{devName}</span>}
+        {conn&&<button onClick={e=>{e.stopPropagation();printer.disconnect();}} style={{marginLeft:4,background:"none",border:"none",color:"#6b7280",cursor:"pointer",fontSize:13,padding:0}} title="Desconectar">✕</button>}
+      </button>
+      {status==="error"&&errMsg&&<div className="bt-error">⚠️ {errMsg}</div>}
+    </div>
+  );
+}
+
+// ─── SuccessModal ──────────────────────────────────────────────────────────────
+function SuccessModal({ sale, onClose, btPrinter }) {
   return (
     <div className="modal-overlay">
       <div className="modal" style={{ textAlign: "center" }}>
@@ -811,14 +959,15 @@ function SuccessModal({ sale, onClose }) {
           {sale.method === "Efectivo" && <><div className="success-row"><span>Recibido</span><span>{fmt(sale.received)}</span></div><div className="success-row"><span>Vuelto</span><span>{fmt(Math.max(0, sale.change))}</span></div></>}
           <div className="success-row"><span>Total</span><span>{fmt(sale.total)}</span></div>
         </div>
-        <button className="btn-primary" onClick={onClose} style={{ width: "100%" }}>Nueva venta</button>
+        <PrintBtn label="Imprimir ticket" onPrint={() => btPrinter.print(buildTicket(sale))} printer={btPrinter} />
+        <button className="btn-primary" onClick={onClose} style={{ width: "100%", marginTop: 4 }}>Nueva venta</button>
       </div>
     </div>
   );
 }
 
 // ─── SaleView ─────────────────────────────────────────────────────────────────
-function SaleView({ products, userProfile, categories }) {
+function SaleView({ products, userProfile, categories, btPrinter }) {
   const [search, setSearch] = useState("");
   const [cat, setCat] = useState("Todas");
   const [cart, setCart] = useState([]);
@@ -909,7 +1058,7 @@ function SaleView({ products, userProfile, categories }) {
       )}
       {kgModal && <KgModal product={kgModal} onConfirm={kg => { addToCart(kgModal, kg); setKgModal(null); }} onClose={() => setKgModal(null)} />}
       {payModal && <PayModal total={total} onConfirm={handlePay} onClose={() => setPayModal(false)} />}
-      {successModal && <SuccessModal sale={successModal} onClose={() => setSuccessModal(null)} />}
+      {successModal && <SuccessModal sale={successModal} onClose={() => setSuccessModal(null)} btPrinter={btPrinter} />}
       <div className="products-area">
         <div className="search-row">
           <div className="search-box"><span className="search-icon">🔍</span><input placeholder="Nombre o código..." value={search} onChange={e => setSearch(e.target.value)} /></div>
@@ -1236,7 +1385,7 @@ function HistoryView({ sales }) {
 }
 
 // ─── ReportsView ──────────────────────────────────────────────────────────────
-function ReportsView({ sales, products }) {
+function ReportsView({ sales, products, btPrinter }) {
   const totalVentas = sales.reduce((s, v) => s + v.total, 0);
   const totalItems = sales.reduce((s, v) => s + (v.items || []).reduce((ss, i) => ss + i.qty, 0), 0);
   const methods = sales.reduce((acc, v) => { acc[v.method] = (acc[v.method] || 0) + v.total; return acc; }, {});
@@ -1280,6 +1429,14 @@ function ReportsView({ sales, products }) {
           <h3>⚠️ Stock bajo</h3>
           {products.filter(p => p.stock < (p.minStock ?? 6)).length === 0 && <div style={{ color: "#6b7280", fontSize: 12 }}>Todo bien ✓</div>}
           {products.filter(p => p.stock < (p.minStock ?? 6)).map(p => <div key={p.id} className="rep-row"><span>{p.name}</span><span style={{ color: "#ff6b6b" }}>{p.stock} {p.unit}</span></div>)}
+        </div>
+        <div className="print-section">
+          <h3>🖨️ IMPRIMIR</h3>
+          <PrintBtn label="Ventas del día" onPrint={() => btPrinter.print(buildSalesReport(sales))} printer={btPrinter} />
+          <PrintBtn label="Stock bajo" onPrint={() => btPrinter.print(buildLowStockReport(products))} printer={btPrinter} />
+          <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4, lineHeight: 1.5 }}>
+            Primera vez: se abrirá el selector Bluetooth para elegir la impresora. Las siguientes impresiones van directo sin volver a preguntar.
+          </div>
         </div>
       </div>
     </div>
@@ -1342,6 +1499,7 @@ export default function App() {
   const [sales, setSales]           = useState([]);
   const [initialized, setInitialized] = useState(false);
   const [categories, setCategories] = useState(CATEGORIES.filter(c => c !== "Todas"));
+  const btPrinter = useBTPrinter();
 
   useEffect(() => {
     // Timeout fallback: if Firebase doesn't respond in 8s, stop loading
@@ -1475,10 +1633,10 @@ export default function App() {
           <button className="logout-btn" onClick={() => signOut(auth)}>Salir</button>
         </div>
         <div className="main">
-          {view === "sale" && <SaleView products={products} userProfile={userProfile} categories={categories} />}
+          {view === "sale" && <SaleView products={products} userProfile={userProfile} categories={categories} btPrinter={btPrinter} />}
           {view === "inventory" && <InventoryView products={products} userProfile={userProfile} categories={categories} />}
           {view === "history" && <HistoryView sales={sales} />}
-          {view === "reports" && <ReportsView sales={sales} products={products} />}
+          {view === "reports" && <ReportsView sales={sales} products={products} btPrinter={btPrinter} />}
           {view === "perms" && <PermissionsView />}
         </div>
         <nav className="bottom-nav">

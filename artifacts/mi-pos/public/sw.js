@@ -1,4 +1,4 @@
-const CACHE_NAME = 'mi-pos-v10';
+const CACHE_NAME = 'mi-pos-v11';
 
 const STATIC_ASSETS = [
   '/manifest.json',
