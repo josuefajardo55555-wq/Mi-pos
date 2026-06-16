@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useState, useEffect, useRef, Component } from "react";
+import { useState, useEffect, useRef } from "react";
 import { db, auth, storage } from "./firebase";
 import {
   collection, doc, onSnapshot, setDoc, deleteDoc, addDoc,
@@ -422,190 +422,183 @@ function PayModal({ total, onConfirm, onClose }) {
   );
 }
 
-// ─── ScannerBoundary ──────────────────────────────────────────────────────────
-// Catches any React render error inside the scanner and shows it on-screen
-// instead of letting it propagate and blank the entire app.
-class ScannerBoundary extends Component {
-  constructor(props) { super(props); this.state = { crashed: false, msg: "" }; }
-  static getDerivedStateFromError(e) {
-    return { crashed: true, msg: e?.message || "Error inesperado en el escáner" };
-  }
-  render() {
-    if (this.state.crashed) {
-      return (
-        <div className="scanner-overlay" onClick={this.props.onClose}>
-          <div className="scanner-box" onClick={e => e.stopPropagation()}>
-            <h2>📷 Escáner</h2>
-            <div style={{ background: "#ff6b6b18", border: "1px solid #ff6b6b55", borderRadius: 10, padding: "14px 12px", fontSize: 13, color: "#ff9999", marginBottom: 12, lineHeight: 1.7 }}>
-              ⚠️ {this.state.msg}
-            </div>
-            <p style={{ fontSize: 12, color: "#9ca3af" }}>Ingresá el código manualmente o cerrá e intentá de nuevo.</p>
-            <div className="modal-actions" style={{ marginTop: 10 }}>
-              <button className="btn-secondary" style={{ flex: 1 }} onClick={this.props.onClose}>Cerrar</button>
-            </div>
-          </div>
-        </div>
-      );
+// ─── CameraScanner ────────────────────────────────────────────────────────────
+// Uses <input type="file" capture="environment"> to open the device camera app.
+// No getUserMedia, no streaming, no permission dialogs, no blank screen.
+// Flow: user taps button → native camera opens → photo taken → decoded here.
+//
+// Decoding: BarcodeDetector (native, Chrome Android) → ZXing MultiFormatReader
+// (CDN fallback using core API: MultiFormatReader + RGBLuminanceSource).
+function CameraScanner({ onCode, onClose }) {
+  const [msg, setMsg]           = useState("Tocá el botón para abrir la cámara");
+  const [error, setError]       = useState("");
+  const [preview, setPreview]   = useState("");   // object URL of captured photo
+  const [processing, setProcessing] = useState(false);
+  const [found, setFound]       = useState("");
+  const inputRef = useRef(null);
+  const previewUrlRef = useRef("");   // track URL for cleanup
+
+  // ── ZXing loader ───────────────────────────────────────────────────────────
+  // Loads @zxing/library UMD which exports core classes: MultiFormatReader,
+  // BinaryBitmap, HybridBinarizer, RGBLuminanceSource.
+  // (BrowserMultiFormatReader is NOT needed — we decode from canvas directly.)
+  const loadZXing = () => new Promise((resolve, reject) => {
+    if (window.ZXing?.MultiFormatReader) { resolve(); return; }
+    const existing = document.getElementById("zxing-script");
+    if (existing) {
+      // Script already injected but may still be loading
+      existing.addEventListener("load", resolve);
+      existing.addEventListener("error", () => reject(new Error("ZXing no cargó")));
+      return;
     }
-    return this.props.children;
-  }
-}
+    const s = document.createElement("script");
+    s.id  = "zxing-script";
+    s.src = "https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js";
+    s.onload  = resolve;
+    s.onerror = () => reject(new Error("No se pudo cargar ZXing desde CDN."));
+    document.head.appendChild(s);
+  });
 
-// ─── CameraScannerInner ────────────────────────────────────────────────────────
-// Pure native: getUserMedia → <video> visible → BarcodeDetector loop.
-// No external libraries. Every failure shown on-screen, never blank.
-function CameraScannerInner({ onCode, onClose }) {
-  const [msg, setMsg]     = useState("Solicitando acceso a la cámara…");
-  const [error, setError] = useState("");
-  const [found, setFound] = useState("");
-  const videoRef  = useRef(null);
-  const activeRef = useRef(true);
-  const streamRef = useRef(null);
-  const rafRef    = useRef(null);
+  // ── Decode image with ZXing core API ──────────────────────────────────────
+  const decodeWithZXing = async (imgEl) => {
+    await loadZXing();
+    const Z = window.ZXing;
+    if (!Z?.MultiFormatReader) throw new Error("ZXing.MultiFormatReader no disponible");
 
-  useEffect(() => {
-    activeRef.current = true;
+    const canvas = document.createElement("canvas");
+    // Limit canvas size to avoid OOM on high-res photos
+    const MAX = 1200;
+    const ratio = Math.min(MAX / imgEl.naturalWidth, MAX / imgEl.naturalHeight, 1);
+    canvas.width  = Math.round(imgEl.naturalWidth  * ratio);
+    canvas.height = Math.round(imgEl.naturalHeight * ratio);
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(imgEl, 0, 0, canvas.width, canvas.height);
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
 
-    const stopCamera = () => {
-      activeRef.current = false;
-      if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
-      if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
-    };
+    const source  = new Z.RGBLuminanceSource(imageData.data, canvas.width, canvas.height);
+    const bitmap  = new Z.BinaryBitmap(new Z.HybridBinarizer(source));
+    const reader  = new Z.MultiFormatReader();
+    // reader.decode throws NotFoundException if nothing found
+    return reader.decode(bitmap).getText();
+  };
 
-    const run = async () => {
-      // ── 1. Check API support ──────────────────────────────────────────────
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        setError("Este navegador no permite acceso a la cámara. Usá Chrome para Android e ingresá el código manualmente.");
-        return;
+  // ── Decode image with native BarcodeDetector ──────────────────────────────
+  const decodeWithBarcodeDetector = async (file) => {
+    const supported = await window.BarcodeDetector.getSupportedFormats();
+    const want = ["ean_13", "ean_8", "code_128", "code_39", "upc_a", "upc_e", "qr_code"];
+    const formats = want.filter(f => supported.includes(f));
+    const detector = new window.BarcodeDetector({ formats: formats.length ? formats : ["ean_13", "code_128"] });
+    const bitmap   = await createImageBitmap(file);
+    const results  = await detector.detect(bitmap);
+    if (!results.length || !results[0].rawValue) throw new Error("not_found");
+    return results[0].rawValue;
+  };
+
+  // ── Main: process the captured photo ─────────────────────────────────────
+  const processFile = async (file) => {
+    // Revoke previous preview URL
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+    const url = URL.createObjectURL(file);
+    previewUrlRef.current = url;
+
+    setError("");
+    setFound("");
+    setPreview(url);
+    setProcessing(true);
+    setMsg("Procesando imagen…");
+
+    try {
+      let code = null;
+
+      // 1. Try native BarcodeDetector (instant, no download)
+      if (typeof window.BarcodeDetector !== "undefined") {
+        try { code = await decodeWithBarcodeDetector(file); } catch (_) {}
       }
 
-      // ── 2. Request camera stream ──────────────────────────────────────────
-      let stream;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: "environment" } },
-          audio: false,
-        });
-      } catch (err) {
-        const n = err?.name || "";
-        if (n === "NotAllowedError" || n === "PermissionDeniedError") {
-          setError("Permiso de cámara denegado.\n\nTocá el ícono 🔒 en la barra del navegador → Permisos → Cámara → Permitir, luego recargá la página.");
-        } else if (n === "NotFoundError" || n === "DevicesNotFoundError") {
-          setError("No se encontró ninguna cámara en este dispositivo.");
-        } else if (n === "NotReadableError" || n === "TrackStartError") {
-          setError(`La cámara está en uso por otra app (${n}). Cerrá otras apps que usen la cámara y volvé a intentar.`);
-        } else {
-          setError(`No se pudo acceder a la cámara.\nError: ${n || err?.message || "desconocido"}\n\nIngresá el código manualmente.`);
-        }
-        return;
+      // 2. Fallback: load ZXing and decode from canvas
+      if (!code) {
+        const img = new Image();
+        img.src = url;
+        await new Promise((res, rej) => { img.onload = res; img.onerror = rej; });
+        try { code = await decodeWithZXing(img); } catch (_) {}
       }
 
-      streamRef.current = stream;
-      if (!activeRef.current) { stream.getTracks().forEach(t => t.stop()); return; }
-
-      // ── 3. Attach stream to <video> and play ─────────────────────────────
-      const video = videoRef.current;
-      if (!video) { stream.getTracks().forEach(t => t.stop()); return; }
-      video.srcObject = stream;
-      try { await video.play(); } catch (_) { /* AbortError on fast unmount — ignore */ }
-      if (!activeRef.current) return;
-
-      setMsg("Cámara activa — apuntá al código de barras");
-
-      // ── 4. Check BarcodeDetector availability ────────────────────────────
-      if (typeof window.BarcodeDetector === "undefined") {
-        setError(
-          "Tu navegador no soporta el escáner automático.\n\n" +
-          "Actualizá Chrome (necesitás versión 83 o superior) o ingresá el código manualmente.\n\n" +
-          "El video de la cámara está activo arriba — podés leer el código visualmente."
-        );
-        // Keep video running so user can read the code visually
-        return;
+      if (code) {
+        setFound(code);
+        setMsg(`✓ Código detectado: ${code}`);
+        setTimeout(() => onCode(code), 500);
+      } else {
+        setError("No se detectó ningún código en la foto.");
+        setMsg("Intentá de nuevo: acercate más, mejor iluminación, código bien centrado.");
       }
+    } catch (err) {
+      setError(`Error al procesar: ${err?.message || String(err)}`);
+      setMsg("Tocá el botón para volver a intentar.");
+    } finally {
+      setProcessing(false);
+    }
+  };
 
-      // ── 5. Build detector ─────────────────────────────────────────────────
-      let detector;
-      try {
-        const supported = await window.BarcodeDetector.getSupportedFormats();
-        const want = ["ean_13", "ean_8", "code_128", "code_39", "upc_a", "upc_e", "qr_code"];
-        const formats = want.filter(f => supported.includes(f));
-        detector = new window.BarcodeDetector({ formats: formats.length ? formats : ["ean_13", "code_128"] });
-      } catch (detErr) {
-        setError(`Error al inicializar el detector: ${detErr?.message ?? String(detErr)}\n\nIngresá el código manualmente.`);
-        return;
-      }
-
-      // ── 6. RAF scan loop ──────────────────────────────────────────────────
-      const recent = [];
-      const scan = async () => {
-        if (!activeRef.current) return;
-        if (video.readyState >= 2) {
-          try {
-            const results = await detector.detect(video);
-            for (const r of results) {
-              if (!r.rawValue) continue;
-              recent.push(r.rawValue);
-              if (recent.length >= 2 && recent.at(-1) === recent.at(-2)) {
-                activeRef.current = false;
-                stream.getTracks().forEach(t => t.stop());
-                setFound(r.rawValue);
-                setMsg(`✓ Detectado: ${r.rawValue}`);
-                setTimeout(() => onCode(r.rawValue), 400);
-                return;
-              }
-            }
-          } catch (_) { /* detect() rejects on empty/paused frames — ignore */ }
-        }
-        if (activeRef.current) rafRef.current = requestAnimationFrame(scan);
-      };
-      rafRef.current = requestAnimationFrame(scan);
-    };
-
-    run();
-    return stopCamera;
-  }, []);
+  const handleChange = (e) => {
+    const file = e.target.files?.[0];
+    if (file) processFile(file);
+    e.target.value = ""; // reset so same photo can be re-selected
+  };
 
   return (
     <div className="scanner-overlay" onClick={onClose}>
       <div className="scanner-box" onClick={e => e.stopPropagation()}>
         <h2>📷 Escanear código</h2>
+        <p style={{ fontSize: 12, color: "#6b7280", marginBottom: 12 }}>
+          EAN-13 · EAN-8 · Code-128 · UPC · QR
+        </p>
 
-        {/* Video always rendered — visible as soon as camera grants permission */}
-        <div style={{ position: "relative", display: error && !streamRef.current ? "none" : "block" }}>
-          <video
-            ref={videoRef}
-            muted
-            playsInline
-            style={{ width: "100%", borderRadius: 10, display: "block", background: "#111", minHeight: 220 }}
+        {/* Photo preview */}
+        {preview && (
+          <img
+            src={preview}
+            alt="Foto capturada"
+            style={{ width: "100%", borderRadius: 10, marginBottom: 10, maxHeight: 220, objectFit: "contain", background: "#111", display: "block" }}
           />
-          {!found && !error && <div className="quagga-aim"><div className="quagga-aim-line" /></div>}
-        </div>
+        )}
 
+        {/* Error message */}
         {error && (
-          <div style={{ background: "#ff6b6b18", border: "1px solid #ff6b6b55", borderRadius: 10, padding: "14px 12px", fontSize: 13, color: "#ff9999", marginTop: 10, lineHeight: 1.7, whiteSpace: "pre-line" }}>
+          <div style={{ background: "#ff6b6b18", border: "1px solid #ff6b6b55", borderRadius: 10, padding: "12px 14px", fontSize: 13, color: "#ff9999", marginBottom: 10, lineHeight: 1.6 }}>
             ⚠️ {error}
           </div>
         )}
 
-        <div className={`scan-status${found ? " found" : ""}`} style={{ marginTop: 8, marginBottom: 4, whiteSpace: "pre-line" }}>
+        {/* Status */}
+        <div className={`scan-status${found ? " found" : ""}`} style={{ marginBottom: 14 }}>
           {msg}
         </div>
-        <div className="modal-actions" style={{ marginTop: 10 }}>
-          <button className="btn-secondary" style={{ flex: 1 }} onClick={onClose}>Cancelar</button>
+
+        {/* Hidden file input — capture="environment" opens rear camera directly */}
+        <input
+          ref={inputRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          style={{ display: "none" }}
+          onChange={handleChange}
+        />
+
+        <div className="modal-actions">
+          <button className="btn-secondary" style={{ flex: 1 }} onClick={onClose}>
+            Cancelar
+          </button>
+          <button
+            className="btn-primary"
+            style={{ flex: 2, opacity: processing ? 0.6 : 1 }}
+            disabled={processing}
+            onClick={() => { if (!processing) inputRef.current?.click(); }}
+          >
+            {processing ? "Procesando…" : preview ? "📷 Volver a sacar" : "📷 Abrir cámara"}
+          </button>
         </div>
       </div>
     </div>
-  );
-}
-
-// ─── CameraScanner ────────────────────────────────────────────────────────────
-// Wraps CameraScannerInner in an Error Boundary so any unexpected crash
-// shows a message on-screen instead of blanking the whole app.
-function CameraScanner(props) {
-  return (
-    <ScannerBoundary onClose={props.onClose}>
-      <CameraScannerInner {...props} />
-    </ScannerBoundary>
   );
 }
 
