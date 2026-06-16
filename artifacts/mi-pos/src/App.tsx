@@ -9,7 +9,7 @@ import {
   createUserWithEmailAndPassword, signInWithEmailAndPassword,
   onAuthStateChanged, signOut
 } from "firebase/auth";
-import { ref, uploadString, getDownloadURL } from "firebase/storage";
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 
 const CATEGORIES = ["Todas", "Lácteos", "Básicos", "Aceites", "Panadería", "Snacks", "Enlatados", "Bebidas", "Frutas y Verd.", "Higiene", "Limpieza"];
 const fmt = (n) => `$${Number(n).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -608,7 +608,7 @@ function CameraScanner({ onCode, onClose }) {
 }
 
 // ─── ProductModal ─────────────────────────────────────────────────────────────
-function ProductModal({ product, onSave, onClose }) {
+function ProductModal({ product, onSave, onClose, categories }) {
   const [form, setForm] = useState(
     product
       ? { ...product, minStock: product.minStock ?? 6 }
@@ -626,20 +626,43 @@ function ProductModal({ product, onSave, onClose }) {
   const handleImg = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
+    // Reset so the same file / photo can be re-selected / re-taken
+    e.target.value = "";
     setUploading(true);
-    const reader = new FileReader();
-    reader.onload = async () => {
-      try {
-        const imgRef = ref(storage, `products/${Date.now()}`);
-        await uploadString(imgRef, reader.result, "data_url");
-        const url = await getDownloadURL(imgRef);
-        set("img", url);
-      } catch {
-        set("img", reader.result);
-      }
+    try {
+      // Resize to max 800px on a canvas — keeps camera photos (4-12 MB) small
+      const blob = await new Promise((resolve) => {
+        const img = new Image();
+        const blobUrl = URL.createObjectURL(file);
+        img.onload = () => {
+          URL.revokeObjectURL(blobUrl);
+          const MAX = 800;
+          const ratio = Math.min(MAX / img.width, MAX / img.height, 1);
+          const canvas = document.createElement("canvas");
+          canvas.width  = Math.round(img.width  * ratio);
+          canvas.height = Math.round(img.height * ratio);
+          canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+          canvas.toBlob(resolve, "image/jpeg", 0.82);
+        };
+        img.onerror = () => { URL.revokeObjectURL(blobUrl); resolve(null); };
+        img.src = blobUrl;
+      });
+      if (!blob) throw new Error("No se pudo procesar la imagen");
+      const imgRef = ref(storage, `products/${Date.now()}.jpg`);
+      await uploadBytes(imgRef, blob);
+      const url = await getDownloadURL(imgRef);
+      set("img", url);
+    } catch {
+      // Fallback: store as local data URL if Firebase upload fails
+      const dataUrl = await new Promise((res) => {
+        const reader = new FileReader();
+        reader.onload = () => res(reader.result);
+        reader.readAsDataURL(file);
+      });
+      set("img", dataUrl);
+    } finally {
       setUploading(false);
-    };
-    reader.readAsDataURL(file);
+    }
   };
 
   // Physical barcode reader: chars arrive < 60 ms apart, ends with Enter
@@ -722,7 +745,7 @@ function ProductModal({ product, onSave, onClose }) {
           <div className="modal-section">
             <div className="modal-label">Categoría</div>
             <select className="select-input" value={form.category} onChange={e => set("category", e.target.value)}>
-              {CATEGORIES.filter(c => c !== "Todas").map(c => <option key={c}>{c}</option>)}
+              {(categories?.length ? categories : CATEGORIES.filter(c => c !== "Todas")).map(c => <option key={c}>{c}</option>)}
             </select>
           </div>
           <div className="modal-section">
@@ -804,7 +827,7 @@ function SuccessModal({ sale, onClose }) {
 }
 
 // ─── SaleView ─────────────────────────────────────────────────────────────────
-function SaleView({ products, userProfile }) {
+function SaleView({ products, userProfile, categories }) {
   const [search, setSearch] = useState("");
   const [cat, setCat] = useState("Todas");
   const [cart, setCart] = useState([]);
@@ -901,7 +924,7 @@ function SaleView({ products, userProfile }) {
           <div className="search-box"><span className="search-icon">🔍</span><input placeholder="Nombre o código..." value={search} onChange={e => setSearch(e.target.value)} /></div>
           <button className="scan-btn" onClick={() => setScannerOpen(true)}>📷 Scan</button>
         </div>
-        <div className="categories">{CATEGORIES.map(c => <button key={c} className={`cat-btn${cat === c ? " active" : ""}`} onClick={() => setCat(c)}>{c}</button>)}</div>
+        <div className="categories">{["Todas", ...(categories?.length ? categories : CATEGORIES.filter(c => c !== "Todas"))].map(c => <button key={c} className={`cat-btn${cat === c ? " active" : ""}`} onClick={() => setCat(c)}>{c}</button>)}</div>
         <div className="grid">
           {filtered.map(p => (
             <div key={p.id} className={`product-card${p.stock < (p.minStock ?? 6) ? " low-stock" : ""}${noStockId === p.id ? " no-stock-flash" : ""}`} onClick={() => handleProductClick(p)}>
@@ -953,10 +976,102 @@ function SaleView({ products, userProfile }) {
   );
 }
 
-// ─── InventoryView ────────────────────────────────────────────────────────────
-function InventoryView({ products, userProfile }) {
-  const [search, setSearch] = useState("");
-  const [modal, setModal] = useState(null);
+// ─── CategoriesModal ──────────────────────────────────────────────────────────
+function CategoriesModal({ categories, onClose }) {
+  const [list, setList]       = useState([...categories]);
+  const [newCat, setNewCat]   = useState("");
+  const [editing, setEditing] = useState(null); // { idx, value }
+  const [saving, setSaving]   = useState(false);
+
+  const persist = async (newList) => {
+    setSaving(true);
+    await setDoc(doc(db, "settings", "categories"), { list: newList });
+    setSaving(false);
+  };
+
+  const add = async () => {
+    const v = newCat.trim();
+    if (!v || list.includes(v)) return;
+    const next = [...list, v];
+    setList(next); setNewCat("");
+    await persist(next);
+  };
+
+  const remove = async (idx) => {
+    if (!confirm(`¿Eliminar la categoría "${list[idx]}"?`)) return;
+    const next = list.filter((_, i) => i !== idx);
+    setList(next);
+    await persist(next);
+  };
+
+  const confirmEdit = async () => {
+    if (!editing) return;
+    const v = editing.value.trim();
+    if (!v) { setEditing(null); return; }
+    const next = list.map((c, i) => i === editing.idx ? v : c);
+    setList(next); setEditing(null);
+    await persist(next);
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()}>
+        <h2>🏷️ Categorías</h2>
+        <p style={{ fontSize: 12, color: "#6b7280", marginBottom: 12 }}>
+          Agregá, editá o eliminá las categorías de tus productos.
+        </p>
+        <div style={{ maxHeight: 280, overflowY: "auto", marginBottom: 12 }}>
+          {list.map((cat, idx) => (
+            <div key={idx} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: "1px solid #2d3448" }}>
+              {editing?.idx === idx ? (
+                <>
+                  <input
+                    value={editing.value}
+                    onChange={e => setEditing({ ...editing, value: e.target.value })}
+                    onKeyDown={e => { if (e.key === "Enter") confirmEdit(); if (e.key === "Escape") setEditing(null); }}
+                    autoFocus
+                    style={{ flex: 1, background: "#1a1f2e", border: "1px solid #00c896", borderRadius: 6, color: "#e8eaf0", padding: "6px 8px", fontSize: 13, outline: "none" }}
+                  />
+                  <button onClick={confirmEdit} disabled={saving} style={{ background: "#00c896", border: "none", borderRadius: 6, color: "#000", fontWeight: 700, padding: "6px 10px", cursor: "pointer", fontSize: 13 }}>✓</button>
+                  <button onClick={() => setEditing(null)} style={{ background: "#3a4158", border: "none", borderRadius: 6, color: "#e8eaf0", padding: "6px 10px", cursor: "pointer", fontSize: 13 }}>✕</button>
+                </>
+              ) : (
+                <>
+                  <span style={{ flex: 1, fontSize: 13 }}>{cat}</span>
+                  <button className="btn-edit" onClick={() => setEditing({ idx, value: cat })}>✏️</button>
+                  <button className="btn-del"  onClick={() => remove(idx)}>🗑</button>
+                </>
+              )}
+            </div>
+          ))}
+          {list.length === 0 && <div style={{ color: "#6b7280", fontSize: 12, textAlign: "center", padding: 16 }}>Sin categorías</div>}
+        </div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+          <input
+            className="modal-input"
+            placeholder="Nueva categoría..."
+            value={newCat}
+            onChange={e => setNewCat(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && add()}
+            style={{ flex: 1 }}
+          />
+          <button className="btn-primary" onClick={add} disabled={!newCat.trim() || saving} style={{ whiteSpace: "nowrap", opacity: saving ? 0.6 : 1 }}>
+            + Agregar
+          </button>
+        </div>
+        <div className="modal-actions">
+          <button className="btn-secondary" style={{ flex: 1 }} onClick={onClose}>Cerrar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── InventoryView ─────────────────────────────────────────────────────────────
+function InventoryView({ products, userProfile, categories }) {
+  const [search, setSearch]   = useState("");
+  const [modal, setModal]     = useState(null);
+  const [showCats, setShowCats] = useState(false);
   const canEdit = userProfile?.role === "owner" || userProfile?.permissions?.editInventory;
 
   const filtered = products.filter(p => p.name.toLowerCase().includes(search.toLowerCase()) || (p.barcode && p.barcode.includes(search)));
@@ -974,10 +1089,12 @@ function InventoryView({ products, userProfile }) {
 
   return (
     <div className="content">
-      {modal && <ProductModal product={modal === "new" ? null : modal} onSave={handleSave} onClose={() => setModal(null)} />}
+      {modal && <ProductModal product={modal === "new" ? null : modal} onSave={handleSave} onClose={() => setModal(null)} categories={categories} />}
+      {showCats && <CategoriesModal categories={categories} onClose={() => setShowCats(false)} />}
       <div className="inv-area">
         <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center" }}>
           <div className="search-box" style={{ flex: 1 }}><span className="search-icon">🔍</span><input placeholder="Buscar..." value={search} onChange={e => setSearch(e.target.value)} /></div>
+          {canEdit && <button className="btn-add" style={{ background: "#3a4158", border: "1px solid #4a5168", fontSize: 18, padding: "6px 10px" }} onClick={() => setShowCats(true)} title="Gestionar categorías">🏷️</button>}
           {canEdit && <button className="btn-add" onClick={() => setModal("new")}>+ Nuevo</button>}
         </div>
         {!canEdit && <div style={{ background: "#fbbf2422", border: "1px solid #fbbf2444", borderRadius: 8, padding: 10, marginBottom: 12, fontSize: 12, color: "#fbbf24" }}>👁️ Solo lectura — no tenés permiso para editar</div>}
@@ -1230,9 +1347,10 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState("");
   const [view, setView] = useState("sale");
-  const [products, setProducts] = useState([]);
-  const [sales, setSales] = useState([]);
+  const [products, setProducts]     = useState([]);
+  const [sales, setSales]           = useState([]);
   const [initialized, setInitialized] = useState(false);
+  const [categories, setCategories] = useState(CATEGORIES.filter(c => c !== "Todas"));
 
   useEffect(() => {
     // Timeout fallback: if Firebase doesn't respond in 8s, stop loading
@@ -1319,6 +1437,21 @@ export default function App() {
     return unsub;
   }, [user]);
 
+  // Load categories from Firestore (real-time); seed defaults if first run
+  useEffect(() => {
+    if (!user) return;
+    const unsub = onSnapshot(doc(db, "settings", "categories"), (snap) => {
+      if (snap.exists()) {
+        setCategories(snap.data().list || []);
+      } else {
+        const defaults = CATEGORIES.filter(c => c !== "Todas");
+        setDoc(doc(db, "settings", "categories"), { list: defaults });
+        setCategories(defaults);
+      }
+    });
+    return unsub;
+  }, [user]);
+
   if (authLoading) return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "#1a1f2e", color: "#00c896", gap: 12 }}>
       <div style={{ fontSize: 36 }}>🛒</div>
@@ -1351,8 +1484,8 @@ export default function App() {
           <button className="logout-btn" onClick={() => signOut(auth)}>Salir</button>
         </div>
         <div className="main">
-          {view === "sale" && <SaleView products={products} userProfile={userProfile} />}
-          {view === "inventory" && <InventoryView products={products} userProfile={userProfile} />}
+          {view === "sale" && <SaleView products={products} userProfile={userProfile} categories={categories} />}
+          {view === "inventory" && <InventoryView products={products} userProfile={userProfile} categories={categories} />}
           {view === "history" && <HistoryView sales={sales} />}
           {view === "reports" && <ReportsView sales={sales} products={products} />}
           {view === "perms" && <PermissionsView />}
