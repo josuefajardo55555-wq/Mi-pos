@@ -615,6 +615,7 @@ function ProductModal({ product, onSave, onClose, categories }) {
       : { name: "", category: "Básicos", type: "unit", price: "", stock: "", unit: "pza", barcode: "", img: "", minStock: 6 }
   );
   const [uploading, setUploading] = useState(false);
+  const [imgError, setImgError]   = useState("");
   const [showScanner, setShowScanner] = useState(false);
   const [barcodeFlash, setBarcodeFlash] = useState(false);
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
@@ -624,42 +625,25 @@ function ProductModal({ product, onSave, onClose, categories }) {
   const physicalBuf = useRef("");
 
   const handleImg = async (e) => {
-    const file = e.target.files[0];
+    const file = e.target.files?.[0];
     if (!file) return;
-    // Reset so the same file / photo can be re-selected / re-taken
     e.target.value = "";
     setUploading(true);
+    setImgError("");
     try {
-      // Resize to max 800px on a canvas — keeps camera photos (4-12 MB) small
-      const blob = await new Promise((resolve) => {
-        const img = new Image();
-        const blobUrl = URL.createObjectURL(file);
-        img.onload = () => {
-          URL.revokeObjectURL(blobUrl);
-          const MAX = 800;
-          const ratio = Math.min(MAX / img.width, MAX / img.height, 1);
-          const canvas = document.createElement("canvas");
-          canvas.width  = Math.round(img.width  * ratio);
-          canvas.height = Math.round(img.height * ratio);
-          canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
-          canvas.toBlob(resolve, "image/jpeg", 0.82);
-        };
-        img.onerror = () => { URL.revokeObjectURL(blobUrl); resolve(null); };
-        img.src = blobUrl;
-      });
-      if (!blob) throw new Error("No se pudo procesar la imagen");
       const imgRef = ref(storage, `products/${Date.now()}.jpg`);
-      await uploadBytes(imgRef, blob);
+      await uploadBytes(imgRef, file);
       const url = await getDownloadURL(imgRef);
       set("img", url);
-    } catch {
-      // Fallback: store as local data URL if Firebase upload fails
-      const dataUrl = await new Promise((res) => {
-        const reader = new FileReader();
-        reader.onload = () => res(reader.result);
-        reader.readAsDataURL(file);
-      });
-      set("img", dataUrl);
+    } catch (err) {
+      const code = err?.code ?? "";
+      if (code === "storage/unauthorized" || code === "storage/unauthenticated") {
+        setImgError("Sin permiso en Storage. Actualizá las reglas en Firebase Console (Storage → Reglas).");
+      } else if (code.startsWith("storage/")) {
+        setImgError(`Error de Storage: ${code}`);
+      } else {
+        setImgError(`Error al subir: ${err?.message ?? String(err)}`);
+      }
     } finally {
       setUploading(false);
     }
@@ -705,35 +689,42 @@ function ProductModal({ product, onSave, onClose, categories }) {
           {/* Camera picker — capture="environment" opens rear camera directly on mobile */}
           <input type="file" accept="image/*" capture="environment" ref={cameraRef} style={{ display: "none" }} onChange={handleImg} />
 
-          {form.img ? (
+          {uploading ? (
+            <div className="img-upload" style={{ cursor: "default" }}>
+              <span style={{ fontSize: 22 }}>⏳</span>
+              <span>Subiendo...</span>
+            </div>
+          ) : form.img ? (
             <div>
               <img src={form.img} className="img-preview" alt="" style={{ marginBottom: 8 }} />
               <div style={{ display: "flex", gap: 8 }}>
-                <button type="button" onClick={() => fileRef.current.click()}
+                <button type="button" onClick={() => { setImgError(""); fileRef.current.click(); }}
                   style={{ flex: 1, background: "#252b3b", border: "1px solid #3a4158", borderRadius: 8, color: "#9ca3af", fontSize: 12, padding: "7px 0", cursor: "pointer" }}>
                   🖼️ Galería
                 </button>
-                <button type="button" onClick={() => cameraRef.current.click()}
+                <button type="button" onClick={() => { setImgError(""); cameraRef.current.click(); }}
                   style={{ flex: 1, background: "#252b3b", border: "1px solid #3a4158", borderRadius: 8, color: "#9ca3af", fontSize: 12, padding: "7px 0", cursor: "pointer" }}>
                   📷 Cámara
                 </button>
               </div>
             </div>
-          ) : uploading ? (
-            <div className="img-upload" style={{ cursor: "default" }}>
-              <span style={{ fontSize: 22 }}>⏳</span>
-              <span>Subiendo...</span>
-            </div>
           ) : (
-            <div style={{ display: "flex", gap: 8 }}>
-              <div className="img-upload" style={{ flex: 1 }} onClick={() => fileRef.current.click()}>
-                <span style={{ fontSize: 20 }}>🖼️</span>
-                <span>Galería</span>
+            <div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <div className="img-upload" style={{ flex: 1 }} onClick={() => { setImgError(""); fileRef.current.click(); }}>
+                  <span style={{ fontSize: 20 }}>🖼️</span>
+                  <span>Galería</span>
+                </div>
+                <div className="img-upload" style={{ flex: 1 }} onClick={() => { setImgError(""); cameraRef.current.click(); }}>
+                  <span style={{ fontSize: 20 }}>📷</span>
+                  <span>Cámara</span>
+                </div>
               </div>
-              <div className="img-upload" style={{ flex: 1 }} onClick={() => cameraRef.current.click()}>
-                <span style={{ fontSize: 20 }}>📷</span>
-                <span>Cámara</span>
-              </div>
+              {imgError && (
+                <div style={{ marginTop: 8, padding: "8px 10px", background: "#2d1515", border: "1px solid #7f1d1d", borderRadius: 8, color: "#fca5a5", fontSize: 11, lineHeight: 1.4 }}>
+                  ⚠️ {imgError}
+                </div>
+              )}
             </div>
           )}
         </div>
