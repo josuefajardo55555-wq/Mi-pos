@@ -1233,9 +1233,12 @@ function CategoriesModal({ categories, onClose }) {
 
 // ─── InventoryView ─────────────────────────────────────────────────────────────
 function InventoryView({ products, userProfile, categories }) {
-  const [search, setSearch]   = useState("");
-  const [modal, setModal]     = useState(null);
-  const [showCats, setShowCats] = useState(false);
+  const [search, setSearch]       = useState("");
+  const [modal, setModal]         = useState(null);
+  const [showCats, setShowCats]   = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importMsg, setImportMsg] = useState(null); // {ok, skipped, error?}
+  const importRef                 = useRef(null);
   const canEdit = userProfile?.role === "owner" || userProfile?.permissions?.editInventory;
 
   const filtered = products.filter(p => p.name.toLowerCase().includes(search.toLowerCase()) || (p.barcode && p.barcode.includes(search)));
@@ -1251,14 +1254,88 @@ function InventoryView({ products, userProfile, categories }) {
     if (confirm("¿Eliminar este producto?")) await deleteDoc(doc(db, "products", id));
   };
 
+  const handleImport = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";            // reset so same file can be picked again
+    if (!file) return;
+    setImporting(true);
+    setImportMsg(null);
+    try {
+      const text = await file.text();
+      const raw  = JSON.parse(text);
+      if (!Array.isArray(raw)) throw new Error("El JSON debe ser un array de productos.");
+
+      // Build a set of existing barcodes for fast lookup (ignore blanks)
+      const existingBarcodes = new Set(
+        products.map(p => p.barcode).filter(Boolean)
+      );
+
+      const toInsert = [];
+      const skipped  = [];
+      for (const item of raw) {
+        const barcode = String(item.barcode ?? "").trim();
+        if (barcode && existingBarcodes.has(barcode)) {
+          skipped.push(barcode);
+          continue;
+        }
+        toInsert.push({
+          barcode:  barcode || null,
+          name:     String(item.name ?? "Sin nombre").trim(),
+          category: String(item.category ?? "General").trim(),
+          price:    parseFloat(item.price)   || 0,
+          stock:    parseFloat(item.stock)   ?? 0,
+          minStock: parseFloat(item.minStock) ?? 5,
+          type:     item.type === "kg" ? "kg" : "unit",
+          unit:     item.type === "kg" ? "kg" : "u",
+          img:      null,
+        });
+      }
+
+      // Insert one by one (Firestore batches are capped at 500; for large sets this is fine)
+      for (const data of toInsert) {
+        await addDoc(collection(db, "products"), data);
+      }
+
+      setImportMsg({ ok: toInsert.length, skipped: skipped.length });
+    } catch (err) {
+      setImportMsg({ ok: 0, skipped: 0, error: err.message });
+    } finally {
+      setImporting(false);
+    }
+  };
+
   return (
     <div className="content">
+      {/* Hidden file picker — triggered by the Importar button */}
+      <input ref={importRef} type="file" accept=".json,application/json"
+        style={{ display: "none" }} onChange={handleImport} />
       {modal && <ProductModal product={modal === "new" ? null : modal} onSave={handleSave} onClose={() => setModal(null)} categories={categories} />}
       {showCats && <CategoriesModal categories={categories} onClose={() => setShowCats(false)} />}
       <div className="inv-area">
+        {importMsg && (
+          <div style={{ background: importMsg.error ? "#3b0d0d" : "#0d2b1e", border: `1px solid ${importMsg.error ? "#ff6b6b" : "#00c896"}`,
+            borderRadius: 8, padding: "10px 14px", marginBottom: 12, fontSize: 13,
+            color: importMsg.error ? "#ff6b6b" : "#00c896", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span>
+              {importMsg.error
+                ? `❌ Error: ${importMsg.error}`
+                : `✅ ${importMsg.ok} producto${importMsg.ok !== 1 ? "s" : ""} importado${importMsg.ok !== 1 ? "s" : ""}${importMsg.skipped ? ` · ${importMsg.skipped} omitido${importMsg.skipped !== 1 ? "s" : ""} (código ya existe)` : ""}`}
+            </span>
+            <button onClick={() => setImportMsg(null)}
+              style={{ background: "none", border: "none", color: "inherit", cursor: "pointer", fontSize: 16, lineHeight: 1 }}>✕</button>
+          </div>
+        )}
         <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center" }}>
           <div className="search-box" style={{ flex: 1 }}><span className="search-icon">🔍</span><input placeholder="Buscar..." value={search} onChange={e => setSearch(e.target.value)} /></div>
           {canEdit && <button className="btn-add" style={{ background: "#3a4158", border: "1px solid #4a5168", fontSize: 18, padding: "6px 10px" }} onClick={() => setShowCats(true)} title="Gestionar categorías">🏷️</button>}
+          {canEdit && (
+            <button className="btn-add" disabled={importing}
+              style={{ background: "#1e2a3b", border: "1px solid #3a5168", color: "#7ec8e3", opacity: importing ? 0.6 : 1 }}
+              onClick={() => importRef.current?.click()}
+              title="Importar productos desde JSON">
+              {importing ? "⏳" : "📥"} Importar
+            </button>
+          )}
           {canEdit && <button className="btn-add" onClick={() => setModal("new")}>+ Nuevo</button>}
         </div>
         {!canEdit && <div style={{ background: "#fbbf2422", border: "1px solid #fbbf2444", borderRadius: 8, padding: 10, marginBottom: 12, fontSize: 12, color: "#fbbf24" }}>👁️ Solo lectura — no tenés permiso para editar</div>}
