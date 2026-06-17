@@ -81,7 +81,15 @@ const css = `
   .product-card.no-stock-flash { border-color: #ff4444 !important; background: #3b1818 !important; animation: no-stock-pulse 0.35s ease 2; }
   @keyframes no-stock-pulse { 0%,100%{opacity:1} 50%{opacity:0.55} }
   .no-stock-toast { position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); background: #b91c1c; color: #fff; border-radius: 14px; padding: 13px 22px; font-size: 14px; font-weight: 600; z-index: 9999; white-space: nowrap; box-shadow: 0 6px 28px rgba(0,0,0,0.55); display: flex; align-items: center; gap: 10px; animation: toast-in 0.2s ease; pointer-events: none; }
+  .low-stock-toast { position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); background: #78350f; color: #fef3c7; border: 1px solid #d97706; border-radius: 14px; padding: 13px 22px; font-size: 14px; font-weight: 600; z-index: 9999; white-space: nowrap; box-shadow: 0 6px 28px rgba(0,0,0,0.55); display: flex; align-items: center; gap: 10px; animation: toast-in 0.2s ease; pointer-events: none; }
   @keyframes toast-in { from{opacity:0;transform:translateX(-50%) translateY(12px)} to{opacity:1;transform:translateX(-50%) translateY(0)} }
+  .stock-toggle-row { display: flex; align-items: center; gap: 8px; padding: 4px 2px 6px; font-size: 12px; color: #9ca3af; user-select: none; }
+  .toggle-switch { position: relative; width: 38px; height: 21px; flex-shrink: 0; }
+  .toggle-switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+  .toggle-slider { position: absolute; inset: 0; background: #3a4158; border-radius: 11px; cursor: pointer; transition: background 0.2s; }
+  .toggle-slider::before { content: ""; position: absolute; width: 15px; height: 15px; left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: transform 0.2s; }
+  .toggle-switch input:checked + .toggle-slider { background: #00c896; }
+  .toggle-switch input:checked + .toggle-slider::before { transform: translateX(17px); }
   .prod-img { width: 100%; height: 65px; border-radius: 6px; margin-bottom: 6px; background: #1e2438; display: flex; align-items: center; justify-content: center; font-size: 26px; overflow: hidden; }
   .prod-img img { width: 100%; height: 65px; object-fit: cover; border-radius: 6px; }
   .product-name { font-size: 11px; font-weight: 600; margin-bottom: 2px; line-height: 1.3; }
@@ -1069,8 +1077,14 @@ function SaleView({ products, userProfile, categories, btPrinter }) {
   const [offLoading, setOffLoading]   = useState(false);  // fetching Open Food Facts
   const [offModal, setOffModal]       = useState(null);   // { barcode, name, brand, found }
   const [noStockId, setNoStockId]     = useState(null);   // product id flashing red
-  const [stockToast, setStockToast]   = useState(null);   // product name shown in toast
-  const noStockTimer = useRef(null);
+  const [stockToast, setStockToast]   = useState(null);   // red "sin stock" toast
+  const [lowStockToast, setLowStockToast] = useState(null); // yellow "stock bajo" toast
+  const [blockNoStock, setBlockNoStock] = useState(() => {
+    const v = localStorage.getItem("mi-pos-block-no-stock");
+    return v === null ? true : v === "true"; // default: bloquear
+  });
+  const noStockTimer   = useRef(null);
+  const lowStockTimer  = useRef(null);
   const barcodeBuffer = useRef("");
   const barcodeTimer  = useRef(null);
   const kbRef         = useRef(null); // hidden input — focus() forces virtual keyboard on Android
@@ -1130,12 +1144,18 @@ function SaleView({ products, userProfile, categories, btPrinter }) {
 
   const handleProductClick = (p) => {
     if (p.stock <= 0) {
-      // Flash the card red and show toast — do NOT add to cart
+      // Always flash the card red and show the sin-stock toast as warning
       clearTimeout(noStockTimer.current);
       setNoStockId(p.id);
       setStockToast(p.name);
       noStockTimer.current = setTimeout(() => { setNoStockId(null); setStockToast(null); }, 2400);
-      return;
+      if (blockNoStock) return; // toggle ON → block completely
+      // toggle OFF → fall through and add to cart anyway
+    } else if (p.stock <= (p.minStock ?? 6)) {
+      // Stock > 0 but at or below minimum → yellow warning, always allow
+      clearTimeout(lowStockTimer.current);
+      setLowStockToast({ name: p.name, qty: p.stock, unit: p.unit || (p.type === "kg" ? "kg" : "u") });
+      lowStockTimer.current = setTimeout(() => setLowStockToast(null), 2800);
     }
     if (p.type === "kg") setKgModal(p); else addToCart(p, 1);
   };
@@ -1214,7 +1234,13 @@ function SaleView({ products, userProfile, categories, btPrinter }) {
       {stockToast && (
         <div className="no-stock-toast">
           <span>🚫</span>
-          <span>Sin stock · {stockToast}</span>
+          <span>{blockNoStock ? "Sin stock" : "⚠️ Sin stock"} · {stockToast}</span>
+        </div>
+      )}
+      {lowStockToast && (
+        <div className="low-stock-toast">
+          <span>⚠️</span>
+          <span>Stock bajo · {lowStockToast.name} ({lowStockToast.qty} {lowStockToast.unit})</span>
         </div>
       )}
       {kgModal && <KgModal product={kgModal} onConfirm={kg => { addToCart(kgModal, kg); setKgModal(null); }} onClose={() => setKgModal(null)} />}
@@ -1230,6 +1256,21 @@ function SaleView({ products, userProfile, categories, btPrinter }) {
           <button className="scan-btn" title="Mostrar teclado" onClick={() => kbRef.current?.focus()}
             style={{ padding:"8px 10px", fontSize:16 }}>⌨️</button>
           <button className="scan-btn" onClick={() => setScannerOpen(true)}>📷 Scan</button>
+        </div>
+        <div className="stock-toggle-row">
+          <label className="toggle-switch" title="Bloquear productos sin stock">
+            <input type="checkbox" checked={blockNoStock} onChange={e => {
+              setBlockNoStock(e.target.checked);
+              localStorage.setItem("mi-pos-block-no-stock", String(e.target.checked));
+            }} />
+            <span className="toggle-slider" />
+          </label>
+          <span style={{ color: blockNoStock ? "#e8eaf0" : "#6b7280" }}>
+            Bloquear sin stock
+          </span>
+          {!blockNoStock && (
+            <span style={{ color: "#d97706", fontSize: 11, marginLeft: 2 }}>— permite vender aunque haya 0 unidades</span>
+          )}
         </div>
         <div className="categories">{["Todas", ...(categories?.length ? categories : CATEGORIES.filter(c => c !== "Todas"))].map(c => <button key={c} className={`cat-btn${cat === c ? " active" : ""}`} onClick={() => setCat(c)}>{c}</button>)}</div>
         <div className="grid">
