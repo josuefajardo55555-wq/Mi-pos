@@ -308,20 +308,21 @@ function LoginScreen({ firebaseError }) {
 }
 
 // ─── Scanner ──────────────────────────────────────────────────────────────────
-function ScannerModal({ products, onFound, onClose }) {
+function ScannerModal({ products, onFound, onNotFound, onClose }) {
   const [status, setStatus]     = useState("Iniciando cámara...");
   const [statusType, setStatusType] = useState("");
   const [manualCode, setManualCode] = useState("");
-  const html5QrRef  = useRef(null);
-  const startedRef  = useRef(false);
-  // aliveRef gates the one-time onFound dispatch — prevents duplicate calls
-  // when the scanner fires the success callback multiple times at 10fps.
-  const aliveRef    = useRef(true);
-  // Keep latest props in refs so the scanner callback never sees stale closures.
-  const productsRef = useRef(products);
-  const onFoundRef  = useRef(onFound);
-  useEffect(() => { productsRef.current = products; }, [products]);
-  useEffect(() => { onFoundRef.current  = onFound;  }, [onFound]);
+  const html5QrRef    = useRef(null);
+  const startedRef    = useRef(false);
+  // aliveRef gates the one-time dispatch — prevents duplicate calls at 10fps.
+  const aliveRef      = useRef(true);
+  // Keep latest props in refs so callbacks never see stale closures.
+  const productsRef   = useRef(products);
+  const onFoundRef    = useRef(onFound);
+  const onNotFoundRef = useRef(onNotFound);
+  useEffect(() => { productsRef.current   = products;   }, [products]);
+  useEffect(() => { onFoundRef.current    = onFound;    }, [onFound]);
+  useEffect(() => { onNotFoundRef.current = onNotFound; }, [onNotFound]);
 
   // handleCode is stable (no deps) — all dynamic data accessed via refs.
   const handleCode = (code) => {
@@ -329,7 +330,7 @@ function ScannerModal({ products, onFound, onClose }) {
     const found = productsRef.current.find(p => p.barcode === code);
     if (found) {
       if (!aliveRef.current) return; // already dispatched — ignore duplicates
-      aliveRef.current  = false;     // lock: only one dispatch ever
+      aliveRef.current   = false;    // lock: only one dispatch ever
       startedRef.current = false;
       setStatus(`✓ ${found.name}`);
       setStatusType("found");
@@ -337,8 +338,14 @@ function ScannerModal({ products, onFound, onClose }) {
       // Short delay so user sees the confirmation before the modal closes
       setTimeout(() => onFoundRef.current(found), 500);
     } else {
-      setStatus(`Código ${code} no registrado. Intentá de nuevo.`);
+      if (!aliveRef.current) return;
+      aliveRef.current   = false;
+      startedRef.current = false;
+      setStatus("⏳ Buscando en base de datos...");
       setStatusType("notfound");
+      if (html5QrRef.current) html5QrRef.current.stop().catch(() => {});
+      // Brief pause so the user sees feedback before the modal changes
+      setTimeout(() => onNotFoundRef.current?.(code), 350);
     }
   };
 
@@ -408,6 +415,103 @@ function ScannerModal({ products, onFound, onClose }) {
           <button className="btn-secondary" style={{ flex: 1 }} onClick={onClose}>Cancelar</button>
           <button className="btn-primary" style={{ flex: 1 }} onClick={() => handleCode(manualCode.trim())}>Buscar</button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── OffModal — Open Food Facts lookup result ──────────────────────────────────
+function OffModal({ barcode, offName, offBrand, found, categories, onClose }) {
+  const [name, setName]         = useState(offName || "");
+  const [cat, setCat]           = useState(categories?.[0] ?? "General");
+  const [price, setPrice]       = useState("");
+  const [minStock, setMinStock] = useState("5");
+  const [saving, setSaving]     = useState(false);
+  const [done, setDone]         = useState(false);
+
+  const valid = name.trim().length > 0 && parseFloat(price) > 0;
+
+  const handleAdd = async () => {
+    if (!valid || saving) return;
+    setSaving(true);
+    try {
+      await addDoc(collection(db, "products"), {
+        barcode:  barcode || null,
+        name:     name.trim(),
+        category: cat || "General",
+        price:    parseFloat(price),
+        stock:    0,
+        minStock: parseFloat(minStock) || 5,
+        type:     "unit",
+        unit:     "u",
+        img:      null,
+      });
+      setDone(true);
+      setTimeout(onClose, 1300);
+    } catch (err) {
+      setSaving(false);
+      alert("Error al guardar: " + err.message);
+    }
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 360 }}>
+        {done ? (
+          <div style={{ textAlign: "center", padding: "24px 0" }}>
+            <div style={{ fontSize: 44 }}>✅</div>
+            <div style={{ color: "#00c896", fontWeight: 600, marginTop: 10 }}>Producto agregado al inventario</div>
+          </div>
+        ) : (
+          <>
+            <h2 style={{ marginBottom: 4 }}>
+              {found ? "🌐 Encontrado en Open Food Facts" : "❓ Código no encontrado"}
+            </h2>
+            {found && offBrand
+              ? <div style={{ color: "#9ca3af", fontSize: 12, marginBottom: 14 }}>{offBrand}</div>
+              : !found && (
+                  <div style={{ color: "#9ca3af", fontSize: 12, marginBottom: 14 }}>
+                    El código <span style={{ fontFamily: "monospace", color: "#e8eaf0" }}>{barcode}</span> no está
+                    en tu inventario ni en Open Food Facts. Completá los datos para cargarlo manualmente.
+                  </div>
+                )
+            }
+            <div className="modal-section">
+              <div className="modal-label">Nombre</div>
+              <input className="modal-input" value={name} onChange={e => setName(e.target.value)}
+                placeholder="Nombre del producto" autoFocus={!found} />
+            </div>
+            <div className="modal-section">
+              <div className="modal-label">Categoría</div>
+              <select className="modal-input" value={cat} onChange={e => setCat(e.target.value)}>
+                {(categories?.length ? categories : ["General"]).map(c => (
+                  <option key={c}>{c}</option>
+                ))}
+              </select>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <div className="modal-section" style={{ flex: 1 }}>
+                <div className="modal-label">Precio ($)</div>
+                <input className="modal-input" type="number" min="0" step="0.01"
+                  placeholder="0.00" value={price} onChange={e => setPrice(e.target.value)}
+                  autoFocus={found} style={{ fontFamily: "monospace" }} />
+              </div>
+              <div className="modal-section" style={{ flex: 1 }}>
+                <div className="modal-label">Stock mínimo</div>
+                <input className="modal-input" type="number" min="0" step="1"
+                  placeholder="5" value={minStock} onChange={e => setMinStock(e.target.value)}
+                  style={{ fontFamily: "monospace" }} />
+              </div>
+            </div>
+            <div className="modal-actions" style={{ marginTop: 8 }}>
+              <button className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>Cancelar</button>
+              <button className="btn-primary" onClick={handleAdd} disabled={!valid || saving}
+                style={{ flex: 2, opacity: (!valid || saving) ? 0.6 : 1 }}>
+                {saving ? "Guardando..." : "Agregar al inventario"}
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -976,6 +1080,8 @@ function SaleView({ products, userProfile, categories, btPrinter }) {
   const [successModal, setSuccessModal] = useState(null);
   const [scannerOpen, setScannerOpen] = useState(false);
   const [lastScanned, setLastScanned] = useState(null);
+  const [offLoading, setOffLoading]   = useState(false);  // fetching Open Food Facts
+  const [offModal, setOffModal]       = useState(null);   // { barcode, name, brand, found }
   const [noStockId, setNoStockId]     = useState(null);   // product id flashing red
   const [stockToast, setStockToast]   = useState(null);   // product name shown in toast
   const noStockTimer = useRef(null);
@@ -983,8 +1089,9 @@ function SaleView({ products, userProfile, categories, btPrinter }) {
   const barcodeTimer  = useRef(null);
   const kbRef         = useRef(null); // hidden input — focus() forces virtual keyboard on Android
   // Refs so the keydown handler never sees stale closures and never re-registers
-  const barcodeProductsRef      = useRef(products);
-  const handleProductClickRef   = useRef(null);    // assigned after function is defined
+  const barcodeProductsRef    = useRef(products);
+  const handleProductClickRef = useRef(null);   // assigned after function is defined
+  const handleNotFoundRef     = useRef(null);   // assigned after function is defined
   useEffect(() => { barcodeProductsRef.current = products; }, [products]);
 
   // ── HID Bluetooth / USB barcode scanner (behaves like a keyboard) ──────────
@@ -1006,6 +1113,7 @@ function SaleView({ products, userProfile, categories, btPrinter }) {
         if (code.length >= 3) {
           const found = barcodeProductsRef.current.find(p => p.barcode === code);
           if (found) handleProductClickRef.current?.(found);
+          else handleNotFoundRef.current?.(code);
         }
       } else if (e.key.length === 1) {
         barcodeBuffer.current += e.key;
@@ -1045,8 +1153,32 @@ function SaleView({ products, userProfile, categories, btPrinter }) {
     }
     if (p.type === "kg") setKgModal(p); else addToCart(p, 1);
   };
-  // Keep ref current every render so the keydown handler always calls latest version
+  // Keep refs current every render so the keydown handler always calls latest versions
   handleProductClickRef.current = handleProductClick;
+
+  // ── Open Food Facts lookup — called when barcode is not in local inventory ──
+  const handleNotFound = async (barcode) => {
+    setScannerOpen(false);
+    setOffLoading(true);
+    setOffModal(null);
+    try {
+      const res  = await fetch(`https://world.openfoodfacts.org/api/v0/product/${encodeURIComponent(barcode)}.json`);
+      const json = await res.json();
+      if (json.status === 1 && json.product) {
+        const p     = json.product;
+        const name  = p.product_name_es || p.product_name || p.abbreviated_product_name || "";
+        const brand = p.brands || "";
+        setOffModal({ barcode, name: name || brand, brand, found: true });
+      } else {
+        setOffModal({ barcode, name: "", brand: "", found: false });
+      }
+    } catch {
+      setOffModal({ barcode, name: "", brand: "", found: false });
+    } finally {
+      setOffLoading(false);
+    }
+  };
+  handleNotFoundRef.current = handleNotFound;
   const updateQty = (id, val) => { const n = parseFloat(val); if (isNaN(n) || n <= 0) return setCart(c => c.filter(i => i.id !== id)); setCart(c => c.map(i => i.id === id ? { ...i, qty: n } : i)); };
   const total = cart.reduce((s, i) => s + i.price * i.qty, 0);
 
@@ -1067,7 +1199,29 @@ function SaleView({ products, userProfile, categories, btPrinter }) {
 
   return (
     <div className="content sale-content">
-      {scannerOpen && <ScannerModal products={products} onFound={p => { setScannerOpen(false); handleProductClick(p); }} onClose={() => setScannerOpen(false)} />}
+      {scannerOpen && <ScannerModal products={products}
+        onFound={p => { setScannerOpen(false); handleProductClick(p); }}
+        onNotFound={code => handleNotFound(code)}
+        onClose={() => setScannerOpen(false)} />}
+      {offLoading && (
+        <div className="modal-overlay">
+          <div className="modal" style={{ textAlign: "center", padding: "32px 24px", maxWidth: 300 }}>
+            <div style={{ fontSize: 36, marginBottom: 12 }}>🔍</div>
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>Buscando en Open Food Facts...</div>
+            <div style={{ color: "#9ca3af", fontSize: 12 }}>Consultando base de datos global de productos</div>
+          </div>
+        </div>
+      )}
+      {offModal && (
+        <OffModal
+          barcode={offModal.barcode}
+          offName={offModal.name}
+          offBrand={offModal.brand}
+          found={offModal.found}
+          categories={categories}
+          onClose={() => setOffModal(null)}
+        />
+      )}
       {stockToast && (
         <div className="no-stock-toast">
           <span>🚫</span>
