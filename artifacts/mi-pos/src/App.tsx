@@ -980,27 +980,42 @@ function SaleView({ products, userProfile, categories, btPrinter }) {
   const [stockToast, setStockToast]   = useState(null);   // product name shown in toast
   const noStockTimer = useRef(null);
   const barcodeBuffer = useRef("");
-  const barcodeTimer = useRef(null);
+  const barcodeTimer  = useRef(null);
+  // Refs so the keydown handler never sees stale closures and never re-registers
+  const barcodeProductsRef      = useRef(products);
+  const handleProductClickRef   = useRef(null);    // assigned after function is defined
+  useEffect(() => { barcodeProductsRef.current = products; }, [products]);
 
-  // Lector externo USB/Bluetooth
+  // ── HID Bluetooth / USB barcode scanner (behaves like a keyboard) ──────────
+  // Strategy: scanners send chars < 50 ms apart and finish with Enter.
+  // Humans type > 150 ms apart. The 100 ms timer is the discriminator.
+  // Guard: skip when the active element is a text input (user typing manually).
   useEffect(() => {
-    const handleKey = (e) => {
+    const onKey = (e) => {
+      // Don't intercept keystrokes while the user is typing in a text field
+      const tag = document.activeElement?.tagName ?? "";
+      const isEditable = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT"
+        || document.activeElement?.isContentEditable;
+      if (isEditable) return;
+
       if (e.key === "Enter") {
         const code = barcodeBuffer.current.trim();
-        if (code.length > 3) {
-          const found = products.find(p => p.barcode === code);
-          if (found) handleProductClick(found);
-        }
         barcodeBuffer.current = "";
+        clearTimeout(barcodeTimer.current);
+        if (code.length >= 3) {
+          const found = barcodeProductsRef.current.find(p => p.barcode === code);
+          if (found) handleProductClickRef.current?.(found);
+        }
       } else if (e.key.length === 1) {
         barcodeBuffer.current += e.key;
         clearTimeout(barcodeTimer.current);
+        // Auto-clear if chars stop arriving (not a scanner burst)
         barcodeTimer.current = setTimeout(() => { barcodeBuffer.current = ""; }, 100);
       }
     };
-    window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
-  }, [products]);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []); // register once — refs keep it current without re-registering
 
   const filtered = products.filter(p => {
     const matchCat = cat === "Todas" || p.category === cat;
@@ -1029,6 +1044,8 @@ function SaleView({ products, userProfile, categories, btPrinter }) {
     }
     if (p.type === "kg") setKgModal(p); else addToCart(p, 1);
   };
+  // Keep ref current every render so the keydown handler always calls latest version
+  handleProductClickRef.current = handleProductClick;
   const updateQty = (id, val) => { const n = parseFloat(val); if (isNaN(n) || n <= 0) return setCart(c => c.filter(i => i.id !== id)); setCart(c => c.map(i => i.id === id ? { ...i, qty: n } : i)); };
   const total = cart.reduce((s, i) => s + i.price * i.qty, 0);
 
