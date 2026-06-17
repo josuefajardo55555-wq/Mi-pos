@@ -421,11 +421,13 @@ function ScannerModal({ products, onFound, onNotFound, onClose }) {
 }
 
 // ─── OffModal — Open Food Facts lookup result ──────────────────────────────────
-function OffModal({ barcode, offName, offBrand, found, categories, onClose }) {
+function OffModal({ barcode, offName, offBrand, offImg, found, categories, onClose }) {
   const [name, setName]         = useState(offName || "");
   const [cat, setCat]           = useState(categories?.[0] ?? "General");
   const [price, setPrice]       = useState("");
   const [minStock, setMinStock] = useState("5");
+  const [img, setImg]           = useState(offImg || "");  // URL of product image
+  const [imgOk, setImgOk]       = useState(!!offImg);     // true once <img> loads without error
   const [saving, setSaving]     = useState(false);
   const [done, setDone]         = useState(false);
   const kbRef                   = useRef(null); // forces virtual keyboard on Android HID
@@ -445,7 +447,7 @@ function OffModal({ barcode, offName, offBrand, found, categories, onClose }) {
         minStock: parseFloat(minStock) || 5,
         type:     "unit",
         unit:     "u",
-        img:      null,
+        img:      (img.trim() && imgOk) ? img.trim() : null,
       });
       setDone(true);
       setTimeout(onClose, 1300);
@@ -480,15 +482,28 @@ function OffModal({ barcode, offName, offBrand, found, categories, onClose }) {
             </div>
 
             {found && offBrand
-              ? <div style={{ color: "#9ca3af", fontSize: 12, marginBottom: 14 }}>{offBrand}</div>
+              ? <div style={{ color: "#9ca3af", fontSize: 12, marginBottom: 10 }}>{offBrand}</div>
               : !found && (
-                  <div style={{ color: "#9ca3af", fontSize: 12, marginBottom: 14 }}>
+                  <div style={{ color: "#9ca3af", fontSize: 12, marginBottom: 10 }}>
                     No encontrado en Open Food Facts. Completá los datos para cargarlo manualmente.
                   </div>
                 )
             }
 
-            {/* Barcode — read-only display so the user always ve qué código se escaneó */}
+            {/* Image — auto-filled from OFF when found, or paste URL manually */}
+            <div className="modal-section" style={{ marginBottom: 10 }}>
+              <div className="modal-label">Imagen</div>
+              {imgOk && img && (
+                <img src={img} alt="" onError={() => setImgOk(false)}
+                  style={{ width: "100%", maxHeight: 140, objectFit: "contain",
+                    borderRadius: 8, background: "#fff", marginBottom: 6 }} />
+              )}
+              <input className="modal-input" value={img} placeholder="https://... (pegá URL de imagen)"
+                onChange={e => { setImg(e.target.value); setImgOk(true); }}
+                style={{ fontSize: 11, color: "#9ca3af" }} />
+            </div>
+
+            {/* Barcode — read-only so the user siempre ve qué código se escaneó */}
             <div className="modal-section" style={{ marginBottom: 10 }}>
               <div className="modal-label">Código de barras</div>
               <input className="modal-input" value={barcode || ""} readOnly
@@ -745,41 +760,13 @@ function ProductModal({ product, onSave, onClose, categories }) {
       ? { ...product, minStock: product.minStock ?? 6 }
       : { name: "", category: "Básicos", type: "unit", price: "", stock: "", unit: "pza", barcode: "", img: "", minStock: 6 }
   );
-  const [uploading, setUploading] = useState(false);
-  const [imgError, setImgError]   = useState("");
+  const [imgOk, setImgOk]         = useState(!!product?.img); // true once preview <img> loads OK
   const [showScanner, setShowScanner] = useState(false);
   const [barcodeFlash, setBarcodeFlash] = useState(false);
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
-  const fileRef     = useRef();
-  const cameraRef   = useRef();
   const kbRef       = useRef(null); // forces virtual keyboard on Android HID
   const lastKeyTime = useRef(0);
   const physicalBuf = useRef("");
-
-  const handleImg = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    e.target.value = "";
-    setUploading(true);
-    setImgError("");
-    try {
-      const imgRef = ref(storage, `products/${Date.now()}.jpg`);
-      await uploadBytes(imgRef, file);
-      const url = await getDownloadURL(imgRef);
-      set("img", url);
-    } catch (err) {
-      const code = err?.code ?? "";
-      if (code === "storage/unauthorized" || code === "storage/unauthenticated") {
-        setImgError("Sin permiso en Storage. Actualizá las reglas en Firebase Console (Storage → Reglas).");
-      } else if (code.startsWith("storage/")) {
-        setImgError(`Error de Storage: ${code}`);
-      } else {
-        setImgError(`Error al subir: ${err?.message ?? String(err)}`);
-      }
-    } finally {
-      setUploading(false);
-    }
-  };
 
   // Physical barcode reader: chars arrive < 60 ms apart, ends with Enter
   const handleBarcodeKeyDown = (e) => {
@@ -823,48 +810,19 @@ function ProductModal({ product, onSave, onClose, categories }) {
               color: "#9ca3af", fontSize: 15, padding: "4px 8px", cursor: "pointer", lineHeight: 1 }}>⌨️</button>
         </div>
         <div className="modal-section">
-          <div className="modal-label">Foto</div>
-          {/* Gallery picker — no capture attribute, opens file browser / gallery */}
-          <input type="file" accept="image/*" ref={fileRef} style={{ display: "none" }} onChange={handleImg} />
-          {/* Camera picker — capture="environment" opens rear camera directly on mobile */}
-          <input type="file" accept="image/*" capture="environment" ref={cameraRef} style={{ display: "none" }} onChange={handleImg} />
-
-          {uploading ? (
-            <div className="img-upload" style={{ cursor: "default" }}>
-              <span style={{ fontSize: 22 }}>⏳</span>
-              <span>Subiendo...</span>
-            </div>
-          ) : form.img ? (
-            <div>
-              <img src={form.img} className="img-preview" alt="" style={{ marginBottom: 8 }} />
-              <div style={{ display: "flex", gap: 8 }}>
-                <button type="button" onClick={() => { setImgError(""); fileRef.current.click(); }}
-                  style={{ flex: 1, background: "#252b3b", border: "1px solid #3a4158", borderRadius: 8, color: "#9ca3af", fontSize: 12, padding: "7px 0", cursor: "pointer" }}>
-                  🖼️ Galería
-                </button>
-                <button type="button" onClick={() => { setImgError(""); cameraRef.current.click(); }}
-                  style={{ flex: 1, background: "#252b3b", border: "1px solid #3a4158", borderRadius: 8, color: "#9ca3af", fontSize: 12, padding: "7px 0", cursor: "pointer" }}>
-                  📷 Cámara
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <div className="img-upload" style={{ flex: 1 }} onClick={() => { setImgError(""); fileRef.current.click(); }}>
-                  <span style={{ fontSize: 20 }}>🖼️</span>
-                  <span>Galería</span>
-                </div>
-                <div className="img-upload" style={{ flex: 1 }} onClick={() => { setImgError(""); cameraRef.current.click(); }}>
-                  <span style={{ fontSize: 20 }}>📷</span>
-                  <span>Cámara</span>
-                </div>
-              </div>
-              {imgError && (
-                <div style={{ marginTop: 8, padding: "8px 10px", background: "#2d1515", border: "1px solid #7f1d1d", borderRadius: 8, color: "#fca5a5", fontSize: 11, lineHeight: 1.4 }}>
-                  ⚠️ {imgError}
-                </div>
-              )}
+          <div className="modal-label">Foto (URL)</div>
+          {/* Preview — shown when form.img is set and loaded without error */}
+          {form.img && imgOk && (
+            <img src={form.img} alt="" onError={() => setImgOk(false)}
+              style={{ width: "100%", maxHeight: 160, objectFit: "contain",
+                borderRadius: 8, background: "#fff", marginBottom: 6 }} />
+          )}
+          <input className="modal-input" value={form.img || ""} placeholder="https://... (pegá URL de imagen)"
+            onChange={e => { set("img", e.target.value); setImgOk(true); }}
+            style={{ fontSize: 11, color: form.img ? "#e8eaf0" : "#6b7280" }} />
+          {form.img && !imgOk && (
+            <div style={{ marginTop: 4, fontSize: 11, color: "#fca5a5" }}>
+              ⚠️ No se pudo cargar la imagen — verificá que la URL sea pública y termine en .jpg/.png/etc.
             </div>
           )}
         </div>
@@ -1196,12 +1154,14 @@ function SaleView({ products, userProfile, categories, btPrinter }) {
         const p     = json.product;
         const name  = p.product_name_es || p.product_name || p.abbreviated_product_name || "";
         const brand = p.brands || "";
-        setOffModal({ barcode, name: name || brand, brand, found: true });
+        // Prefer the Spanish front image, fall back to generic front or any front image
+        const img   = p.image_front_small_url || p.image_front_url || p.image_small_url || p.image_url || "";
+        setOffModal({ barcode, name: name || brand, brand, img, found: true });
       } else {
-        setOffModal({ barcode, name: "", brand: "", found: false });
+        setOffModal({ barcode, name: "", brand: "", img: "", found: false });
       }
     } catch {
-      setOffModal({ barcode, name: "", brand: "", found: false });
+      setOffModal({ barcode, name: "", brand: "", img: "", found: false });
     } finally {
       setOffLoading(false);
     }
@@ -1245,6 +1205,7 @@ function SaleView({ products, userProfile, categories, btPrinter }) {
           barcode={offModal.barcode}
           offName={offModal.name}
           offBrand={offModal.brand}
+          offImg={offModal.img}
           found={offModal.found}
           categories={categories}
           onClose={() => setOffModal(null)}
