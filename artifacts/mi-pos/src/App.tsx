@@ -886,7 +886,7 @@ function ProductModal({ product, onSave, onClose, categories }) {
         </div>
         <div className="modal-actions">
           <button className="btn-secondary" onClick={onClose}>Cancelar</button>
-          <button className="btn-primary" disabled={uploading} onClick={() => {
+          <button className="btn-primary" onClick={() => {
             if (form.name && form.price) onSave({ ...form, price: parseFloat(form.price), stock: parseFloat(form.stock) || 0, minStock: parseInt(form.minStock) || 6 });
           }}>Guardar</button>
         </div>
