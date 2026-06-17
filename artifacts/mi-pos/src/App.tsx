@@ -428,6 +428,7 @@ function OffModal({ barcode, offName, offBrand, found, categories, onClose }) {
   const [minStock, setMinStock] = useState("5");
   const [saving, setSaving]     = useState(false);
   const [done, setDone]         = useState(false);
+  const kbRef                   = useRef(null); // forces virtual keyboard on Android HID
 
   const valid = name.trim().length > 0 && parseFloat(price) > 0;
 
@@ -456,6 +457,9 @@ function OffModal({ barcode, offName, offBrand, found, categories, onClose }) {
 
   return (
     <div className="modal-overlay" onClick={onClose}>
+      {/* Off-screen input — focus() summons the virtual keyboard when HID scanner suppresses it */}
+      <input ref={kbRef} readOnly aria-hidden="true"
+        style={{ position: "fixed", top: -999, left: -999, width: 1, height: 1, opacity: 0, pointerEvents: "none" }} />
       <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 360 }}>
         {done ? (
           <div style={{ textAlign: "center", padding: "24px 0" }}>
@@ -464,22 +468,37 @@ function OffModal({ barcode, offName, offBrand, found, categories, onClose }) {
           </div>
         ) : (
           <>
-            <h2 style={{ marginBottom: 4 }}>
-              {found ? "🌐 Encontrado en Open Food Facts" : "❓ Código no encontrado"}
-            </h2>
+            {/* Header row: title + ⌨️ button */}
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 4 }}>
+              <h2 style={{ margin: 0 }}>
+                {found ? "🌐 Encontrado en Open Food Facts" : "❓ Código no encontrado"}
+              </h2>
+              <button onClick={() => kbRef.current?.focus()} title="Mostrar teclado"
+                style={{ background: "#252b3b", border: "1px solid #3a4158", borderRadius: 6,
+                  color: "#9ca3af", fontSize: 15, padding: "4px 8px", cursor: "pointer",
+                  lineHeight: 1, flexShrink: 0, marginLeft: 8 }}>⌨️</button>
+            </div>
+
             {found && offBrand
               ? <div style={{ color: "#9ca3af", fontSize: 12, marginBottom: 14 }}>{offBrand}</div>
               : !found && (
                   <div style={{ color: "#9ca3af", fontSize: 12, marginBottom: 14 }}>
-                    El código <span style={{ fontFamily: "monospace", color: "#e8eaf0" }}>{barcode}</span> no está
-                    en tu inventario ni en Open Food Facts. Completá los datos para cargarlo manualmente.
+                    No encontrado en Open Food Facts. Completá los datos para cargarlo manualmente.
                   </div>
                 )
             }
+
+            {/* Barcode — read-only display so the user always ve qué código se escaneó */}
+            <div className="modal-section" style={{ marginBottom: 10 }}>
+              <div className="modal-label">Código de barras</div>
+              <input className="modal-input" value={barcode || ""} readOnly
+                style={{ fontFamily: "monospace", color: "#6b7280", cursor: "default" }} />
+            </div>
+
             <div className="modal-section">
               <div className="modal-label">Nombre</div>
               <input className="modal-input" value={name} onChange={e => setName(e.target.value)}
-                placeholder="Nombre del producto" autoFocus={!found} />
+                placeholder="Nombre del producto" autoFocus />
             </div>
             <div className="modal-section">
               <div className="modal-label">Categoría</div>
@@ -494,7 +513,7 @@ function OffModal({ barcode, offName, offBrand, found, categories, onClose }) {
                 <div className="modal-label">Precio ($)</div>
                 <input className="modal-input" type="number" min="0" step="0.01"
                   placeholder="0.00" value={price} onChange={e => setPrice(e.target.value)}
-                  autoFocus={found} style={{ fontFamily: "monospace" }} />
+                  style={{ fontFamily: "monospace" }} />
               </div>
               <div className="modal-section" style={{ flex: 1 }}>
                 <div className="modal-label">Stock mínimo</div>
@@ -731,8 +750,9 @@ function ProductModal({ product, onSave, onClose, categories }) {
   const [showScanner, setShowScanner] = useState(false);
   const [barcodeFlash, setBarcodeFlash] = useState(false);
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
-  const fileRef   = useRef();
-  const cameraRef = useRef();
+  const fileRef     = useRef();
+  const cameraRef   = useRef();
+  const kbRef       = useRef(null); // forces virtual keyboard on Android HID
   const lastKeyTime = useRef(0);
   const physicalBuf = useRef("");
 
@@ -791,9 +811,17 @@ function ProductModal({ product, onSave, onClose, categories }) {
   return (
     <>
     {showScanner && <CameraScanner onCode={handleCameraCode} onClose={() => setShowScanner(false)} />}
+    {/* Off-screen input — focus() summons the virtual keyboard when HID scanner suppresses it */}
+    <input ref={kbRef} readOnly aria-hidden="true"
+      style={{ position: "fixed", top: -999, left: -999, width: 1, height: 1, opacity: 0, pointerEvents: "none" }} />
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()}>
-        <h2>{product ? "Editar producto" : "Nuevo producto"}</h2>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+          <h2 style={{ margin: 0 }}>{product ? "Editar producto" : "Nuevo producto"}</h2>
+          <button onClick={() => kbRef.current?.focus()} title="Mostrar teclado"
+            style={{ background: "#252b3b", border: "1px solid #3a4158", borderRadius: 6,
+              color: "#9ca3af", fontSize: 15, padding: "4px 8px", cursor: "pointer", lineHeight: 1 }}>⌨️</button>
+        </div>
         <div className="modal-section">
           <div className="modal-label">Foto</div>
           {/* Gallery picker — no capture attribute, opens file browser / gallery */}
