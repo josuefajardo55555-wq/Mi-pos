@@ -981,6 +981,7 @@ function SaleView({ products, userProfile, categories, btPrinter }) {
   const noStockTimer = useRef(null);
   const barcodeBuffer = useRef("");
   const barcodeTimer  = useRef(null);
+  const kbRef         = useRef(null); // hidden input — focus() forces virtual keyboard on Android
   // Refs so the keydown handler never sees stale closures and never re-registers
   const barcodeProductsRef      = useRef(products);
   const handleProductClickRef   = useRef(null);    // assigned after function is defined
@@ -1078,7 +1079,13 @@ function SaleView({ products, userProfile, categories, btPrinter }) {
       {successModal && <SuccessModal sale={successModal} onClose={() => setSuccessModal(null)} btPrinter={btPrinter} />}
       <div className="products-area">
         <div className="search-row">
+          {/* Hidden input whose sole purpose is receiving focus to summon the virtual keyboard.
+              Positioned off-screen so it never shows; readOnly prevents any text insertion. */}
+          <input ref={kbRef} readOnly aria-hidden="true"
+            style={{ position:"fixed", top:-999, left:-999, width:1, height:1, opacity:0, pointerEvents:"none" }} />
           <div className="search-box"><span className="search-icon">🔍</span><input placeholder="Nombre o código..." value={search} onChange={e => setSearch(e.target.value)} /></div>
+          <button className="scan-btn" title="Mostrar teclado" onClick={() => kbRef.current?.focus()}
+            style={{ padding:"8px 10px", fontSize:16 }}>⌨️</button>
           <button className="scan-btn" onClick={() => setScannerOpen(true)}>📷 Scan</button>
         </div>
         <div className="categories">{["Todas", ...(categories?.length ? categories : CATEGORIES.filter(c => c !== "Todas"))].map(c => <button key={c} className={`cat-btn${cat === c ? " active" : ""}`} onClick={() => setCat(c)}>{c}</button>)}</div>
