@@ -77,19 +77,26 @@ jobs:
           echo "Contenido de twa-project:"
           ls -la twa-project/
 
+      - name: Instalar expect
+        run: sudo apt-get install -y expect
+
       - name: Construir APK
         working-directory: twa-project
         run: |
-          mkfifo /tmp/bw-pipe
-          # Inquirer.js reads ahead eagerly: provide n + 6 rounds of passwords
-          # so even after early eager reads, real prompts still get answered.
-          # sleep 7200 keeps stdin open for the full Gradle build (never closes).
-          (printf "n\n${STORE_PASS}\n${KEY_PASS}\n${STORE_PASS}\n${KEY_PASS}\n${STORE_PASS}\n${KEY_PASS}\n"; sleep 7200) > /tmp/bw-pipe &
-          FEEDER=$!
-          bubblewrap build --skipPwaValidation < /tmp/bw-pipe
-          EXIT_CODE=$?
-          kill $FEEDER 2>/dev/null || true
-          exit $EXIT_CODE
+          # Write expect script — bash expands ${STORE_PASS}/${KEY_PASS} here,
+          # so the file contains literal passwords and no shell variables remain.
+          cat > /tmp/build-apk.exp << EOF
+          set timeout 10800
+          spawn bubblewrap build --skipPwaValidation
+          expect -re {regenerate}
+          send "n\r"
+          expect -re {Password for the Key Store:}
+          send "${STORE_PASS}\r"
+          expect -re {Password for Key}
+          send "${KEY_PASS}\r"
+          expect eof
+          EOF
+          expect /tmp/build-apk.exp
         env:
           BUBBLEWRAP_KEYSTORE_PASSWD: ${{ env.STORE_PASS }}
           BUBBLEWRAP_KEY_PASSWD:      ${{ env.KEY_PASS }}
