@@ -1,0 +1,81 @@
+name: Build Mi POS APK (TWA)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Configurar JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Configurar Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Configurar Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Instalar build-tools y plataforma Android
+        run: |
+          sdkmanager --sdk_root=$ANDROID_SDK_ROOT \
+            "build-tools;34.0.0" \
+            "platforms;android-34" \
+            "platform-tools"
+
+      - name: Instalar Bubblewrap CLI
+        run: npm install -g @bubblewrap/cli@latest
+
+      - name: Preparar keystore de firma
+        run: |
+          STORE_PASS="${{ secrets.STORE_PASSWORD }}"
+          KEY_PASS="${{ secrets.KEY_PASSWORD }}"
+          STORE_PASS="${STORE_PASS:-mipos2024}"
+          KEY_PASS="${KEY_PASS:-mipos2024}"
+          echo "STORE_PASS=${STORE_PASS}" >> $GITHUB_ENV
+          echo "KEY_PASS=${KEY_PASS}"     >> $GITHUB_ENV
+
+          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
+            echo "Usando keystore de producción desde secrets..."
+            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android.keystore
+          else
+            echo "Generando keystore de debug (sideload)..."
+            keytool -genkeypair -v \
+              -keystore android.keystore \
+              -alias mi-pos \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "${STORE_PASS}" \
+              -keypass  "${KEY_PASS}" \
+              -dname "CN=Mi POS, OU=Debug, O=MiPOS, L=Buenos Aires, ST=Buenos Aires, C=AR"
+          fi
+
+      - name: Construir APK
+        run: bubblewrap build --skipPwaValidation
+        env:
+          BUBBLEWRAP_KEYSTORE_PASSWD: ${{ env.STORE_PASS }}
+          BUBBLEWRAP_KEY_PASSWD:      ${{ env.KEY_PASS }}
+
+      - name: Buscar APK generado
+        run: find . -name "*.apk" 2>/dev/null || echo "No se encontraron APKs"
+
+      - name: Subir APK como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: mi-pos-apk-v${{ github.run_number }}
+          path: |
+            app-release-signed.apk
+            app-release.apk
+            *.apk
+          if-no-files-found: warn
+          retention-days: 30
