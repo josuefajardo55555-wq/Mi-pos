@@ -1098,11 +1098,30 @@ function PrintBtn({label,onPrint,printer}){
 
 // ─── SuccessModal ──────────────────────────────────────────────────────────────
 function SuccessModal({ sale, onClose, btPrinter, wifiPrinter, bizName }) {
+  const [httpStatus, setHttpStatus] = useState<"idle"|"printing"|"ok"|"error">("idle");
+
   useEffect(() => {
     // Auto-print via WiFi as soon as the modal appears
     wifiPrinter.print(buildTicket(sale, bizName || "MI POS"));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function printViaHttp() {
+    setHttpStatus("printing");
+    try {
+      const bytes = buildTicket(sale, bizName || "MI POS");
+      await fetch("http://192.168.100.80:3000/imprimir", {
+        method: "POST",
+        headers: { "Content-Type": "application/octet-stream" },
+        body: bytes,
+      });
+      setHttpStatus("ok");
+      setTimeout(() => setHttpStatus("idle"), 3000);
+    } catch {
+      setHttpStatus("error");
+      setTimeout(() => setHttpStatus("idle"), 3000);
+    }
+  }
 
   return (
     <div className="modal-overlay">
@@ -1114,6 +1133,25 @@ function SuccessModal({ sale, onClose, btPrinter, wifiPrinter, bizName }) {
           <div className="success-row"><span>Método</span><span>{sale.method}</span></div>
           {sale.method === "Efectivo" && <><div className="success-row"><span>Recibido</span><span>{fmt(sale.received)}</span></div><div className="success-row"><span>Vuelto</span><span>{fmt(Math.max(0, sale.change))}</span></div></>}
           <div className="success-row"><span>Total</span><span>{fmt(sale.total)}</span></div>
+        </div>
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ fontSize: 10, color: "#9ca3af", textAlign: "left", marginBottom: 4, fontWeight: 600 }}>Red local — 192.168.100.80</div>
+          <button
+            onClick={printViaHttp}
+            disabled={httpStatus === "printing"}
+            style={{
+              width: "100%", padding: "10px 0", borderRadius: 8, border: "none", cursor: httpStatus === "printing" ? "default" : "pointer",
+              fontWeight: 600, fontSize: 14,
+              background: httpStatus === "ok" ? "#065f46" : httpStatus === "error" ? "#7f1d1d" : "#1e293b",
+              color: httpStatus === "ok" ? "#6ee7b7" : httpStatus === "error" ? "#fca5a5" : "#f1f5f9",
+              display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+            }}
+          >
+            {httpStatus === "idle"     && <><span>🖨️</span> Imprimir ticket</>}
+            {httpStatus === "printing" && <><span style={{ animation: "spin 1s linear infinite", display:"inline-block" }}>⏳</span> Enviando...</>}
+            {httpStatus === "ok"       && <><span>✅</span> Ticket enviado</>}
+            {httpStatus === "error"    && <><span>⚠️</span> Error al imprimir</>}
+          </button>
         </div>
         <div style={{ marginBottom: 4 }}>
           <div style={{ fontSize: 10, color: "#9ca3af", textAlign: "left", marginBottom: 4, fontWeight: 600 }}>WiFi — OCOM</div>
