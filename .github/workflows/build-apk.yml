@@ -77,14 +77,9 @@ jobs:
           echo "Contenido de twa-project:"
           ls -la twa-project/
 
-      - name: Crear checksum twa-manifest para evitar prompts
+      - name: Inicializar proyecto TWA
         working-directory: twa-project
-        run: |
-          # Bubblewrap busca twa-manifest.json.sha256 junto al manifiesto.
-          # Si el archivo existe y coincide, no pregunta "regenerar?" ni passwords.
-          sha256sum twa-manifest.json | awk '{print $1}' > twa-manifest.json.sha256
-          echo "Checksum generado:"
-          cat twa-manifest.json.sha256
+        run: bubblewrap init --skipPwaValidation < /dev/null || true
 
       - name: Construir APK
         working-directory: twa-project
