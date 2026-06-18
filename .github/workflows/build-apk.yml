@@ -73,7 +73,7 @@ jobs:
           cat ~/.bubblewrap/config.json
 
       - name: Construir APK
-        run: bubblewrap build --skipPwaValidation
+        run: yes "" | bubblewrap build --skipPwaValidation
         env:
           BUBBLEWRAP_KEYSTORE_PASSWD: ${{ env.STORE_PASS }}
           BUBBLEWRAP_KEY_PASSWD:      ${{ env.KEY_PASS }}
