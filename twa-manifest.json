@@ -23,7 +23,7 @@
       "name": "Nueva venta",
       "shortName": "Venta",
       "url": "/?tab=venta",
-      "iconUrl": "https://pos-update--josuequispe98.replit.app/icon-192.png"
+      "chosenIconUrl": "https://pos-update--josuequispe98.replit.app/icon-192.png"
     }
   ],
   "webManifestUrl": "https://pos-update--josuequispe98.replit.app/manifest.json",
