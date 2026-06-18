@@ -79,7 +79,16 @@ jobs:
 
       - name: Construir APK
         working-directory: twa-project
-        run: echo "n" | bubblewrap build --skipPwaValidation
+        run: |
+          mkfifo /tmp/bw-pipe
+          # Provide answers in order: (1) "n" = no regenerate, (2) keystore pwd, (3) key pwd
+          # sleep keeps write end open so stdin never closes during Gradle build
+          (printf "n\n${STORE_PASS}\n${KEY_PASS}\n"; sleep 1800) > /tmp/bw-pipe &
+          FEEDER=$!
+          bubblewrap build --skipPwaValidation < /tmp/bw-pipe
+          EXIT_CODE=$?
+          kill $FEEDER 2>/dev/null || true
+          exit $EXIT_CODE
         env:
           BUBBLEWRAP_KEYSTORE_PASSWD: ${{ env.STORE_PASS }}
           BUBBLEWRAP_KEY_PASSWD:      ${{ env.KEY_PASS }}
