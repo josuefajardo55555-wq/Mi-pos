@@ -1025,6 +1025,58 @@ function useBTPrinter(){
   return {status,errMsg,devName,connect,disconnect,print};
 }
 
+// ─── WiFi printer hook ────────────────────────────────────────────────────────
+const WIFI_PROXY_URL = "ws://localhost:9200";
+function useWifiPrinter() {
+  const [status, setStatus] = useState("idle");
+  const [errMsg,  setErrMsg]  = useState("");
+  const wsRef = useRef(null);
+
+  const connect = () => new Promise((resolve) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) { resolve(true); return; }
+    setStatus("connecting"); setErrMsg("");
+    const ws = new WebSocket(WIFI_PROXY_URL);
+    ws.binaryType = "arraybuffer";
+    ws.onopen  = () => { wsRef.current = ws; setStatus("connected"); resolve(true); };
+    ws.onerror = () => {
+      wsRef.current = null;
+      setStatus("error");
+      setErrMsg("No se pudo conectar al proxy. Ejecutá printer-proxy/proxy.js en tu PC.");
+      resolve(false);
+    };
+    ws.onclose = () => { wsRef.current = null; setStatus(s => s !== "error" ? "idle" : s); };
+    ws.onmessage = (e) => {
+      try {
+        const txt = typeof e.data === "string" ? e.data : new TextDecoder().decode(e.data);
+        const d = JSON.parse(txt);
+        if (d.error) { setStatus("error"); setErrMsg(d.error); }
+      } catch {}
+    };
+  });
+
+  const disconnect = () => {
+    wsRef.current?.close();
+    wsRef.current = null;
+    setStatus("idle"); setErrMsg("");
+  };
+
+  const print = async (bytes) => {
+    const ok = await connect();
+    if (!ok) return;
+    setStatus("printing");
+    try {
+      wsRef.current.send(bytes);
+      await new Promise(r => setTimeout(r, 800));
+      setStatus("connected");
+    } catch (err) {
+      setStatus("error");
+      setErrMsg(err.message || String(err));
+    }
+  };
+
+  return { status, errMsg, devName: "WiFi OCOM", connect, disconnect, print };
+}
+
 // ─── PrintBtn ──────────────────────────────────────────────────────────────────
 function PrintBtn({label,onPrint,printer}){
   const {status,errMsg,devName}=printer;
@@ -1045,7 +1097,13 @@ function PrintBtn({label,onPrint,printer}){
 }
 
 // ─── SuccessModal ──────────────────────────────────────────────────────────────
-function SuccessModal({ sale, onClose, btPrinter }) {
+function SuccessModal({ sale, onClose, btPrinter, wifiPrinter, bizName }) {
+  useEffect(() => {
+    // Auto-print via WiFi as soon as the modal appears
+    wifiPrinter.print(buildTicket(sale, bizName || "MI POS"));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
     <div className="modal-overlay">
       <div className="modal" style={{ textAlign: "center" }}>
@@ -1057,7 +1115,14 @@ function SuccessModal({ sale, onClose, btPrinter }) {
           {sale.method === "Efectivo" && <><div className="success-row"><span>Recibido</span><span>{fmt(sale.received)}</span></div><div className="success-row"><span>Vuelto</span><span>{fmt(Math.max(0, sale.change))}</span></div></>}
           <div className="success-row"><span>Total</span><span>{fmt(sale.total)}</span></div>
         </div>
-        <PrintBtn label="Imprimir ticket" onPrint={() => btPrinter.print(buildTicket(sale))} printer={btPrinter} />
+        <div style={{ marginBottom: 4 }}>
+          <div style={{ fontSize: 10, color: "#9ca3af", textAlign: "left", marginBottom: 4, fontWeight: 600 }}>WiFi — OCOM</div>
+          <PrintBtn label="Imprimir ticket (WiFi)" onPrint={() => wifiPrinter.print(buildTicket(sale, bizName || "MI POS"))} printer={wifiPrinter} />
+        </div>
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ fontSize: 10, color: "#9ca3af", textAlign: "left", marginBottom: 4, fontWeight: 600 }}>Bluetooth</div>
+          <PrintBtn label="Imprimir ticket (BT)" onPrint={() => btPrinter.print(buildTicket(sale, bizName || "MI POS"))} printer={btPrinter} />
+        </div>
         <button className="btn-primary" onClick={onClose} style={{ width: "100%", marginTop: 4 }}>Nueva venta</button>
       </div>
     </div>
@@ -1065,7 +1130,7 @@ function SuccessModal({ sale, onClose, btPrinter }) {
 }
 
 // ─── SaleView ─────────────────────────────────────────────────────────────────
-function SaleView({ products, userProfile, categories, btPrinter }) {
+function SaleView({ products, userProfile, categories, btPrinter, wifiPrinter, bizName }) {
   const [search, setSearch] = useState("");
   const [cat, setCat] = useState("Todas");
   const [cart, setCart] = useState([]);
@@ -1245,7 +1310,7 @@ function SaleView({ products, userProfile, categories, btPrinter }) {
       )}
       {kgModal && <KgModal product={kgModal} onConfirm={kg => { addToCart(kgModal, kg); setKgModal(null); }} onClose={() => setKgModal(null)} />}
       {payModal && <PayModal total={total} onConfirm={handlePay} onClose={() => setPayModal(false)} />}
-      {successModal && <SuccessModal sale={successModal} onClose={() => setSuccessModal(null)} btPrinter={btPrinter} />}
+      {successModal && <SuccessModal sale={successModal} onClose={() => setSuccessModal(null)} btPrinter={btPrinter} wifiPrinter={wifiPrinter} bizName={bizName} />}
       <div className="products-area">
         <div className="search-row">
           {/* Hidden input whose sole purpose is receiving focus to summon the virtual keyboard.
@@ -1670,7 +1735,7 @@ function HistoryView({ sales }) {
 }
 
 // ─── ReportsView ──────────────────────────────────────────────────────────────
-function ReportsView({ sales, products, btPrinter }) {
+function ReportsView({ sales, products, btPrinter, wifiPrinter, bizName, setBizName }) {
   const totalVentas = sales.reduce((s, v) => s + v.total, 0);
   const totalItems = sales.reduce((s, v) => s + (v.items || []).reduce((ss, i) => ss + i.qty, 0), 0);
   const methods = sales.reduce((acc, v) => { acc[v.method] = (acc[v.method] || 0) + v.total; return acc; }, {});
@@ -1717,10 +1782,21 @@ function ReportsView({ sales, products, btPrinter }) {
         </div>
         <div className="print-section">
           <h3>🖨️ IMPRIMIR</h3>
-          <PrintBtn label="Ventas del día" onPrint={() => btPrinter.print(buildSalesReport(sales))} printer={btPrinter} />
-          <PrintBtn label="Stock bajo" onPrint={() => btPrinter.print(buildLowStockReport(products))} printer={btPrinter} />
+          <div style={{ marginBottom: 10 }}>
+            <label style={{ fontSize: 11, color: "#9ca3af", display: "block", marginBottom: 4 }}>Nombre del negocio en tickets</label>
+            <input className="product-input" value={bizName} onChange={e => { setBizName(e.target.value); localStorage.setItem("mi-pos-biz-name", e.target.value); }} placeholder="MI POS" style={{ fontSize: 13, marginBottom: 0 }} />
+          </div>
+          <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 5, marginTop: 10, fontWeight: 600 }}>📡 WiFi — OCOM OCPP-80K</div>
+          <PrintBtn label="Ventas del día" onPrint={() => wifiPrinter.print(buildSalesReport(sales, bizName))} printer={wifiPrinter} />
+          <PrintBtn label="Stock bajo" onPrint={() => wifiPrinter.print(buildLowStockReport(products, bizName))} printer={wifiPrinter} />
           <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4, lineHeight: 1.5 }}>
-            Primera vez: se abrirá el selector Bluetooth para elegir la impresora. Las siguientes impresiones van directo sin volver a preguntar.
+            Necesita printer-proxy/proxy.js corriendo en la PC local.
+          </div>
+          <div style={{ fontSize: 11, color: "#9ca3af", margin: "10px 0 5px", fontWeight: 600 }}>🔵 Bluetooth</div>
+          <PrintBtn label="Ventas del día" onPrint={() => btPrinter.print(buildSalesReport(sales, bizName))} printer={btPrinter} />
+          <PrintBtn label="Stock bajo" onPrint={() => btPrinter.print(buildLowStockReport(products, bizName))} printer={btPrinter} />
+          <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4, lineHeight: 1.5 }}>
+            Primera vez: selector Bluetooth para elegir impresora.
           </div>
         </div>
       </div>
@@ -1784,7 +1860,9 @@ export default function App() {
   const [sales, setSales]           = useState([]);
   const [initialized, setInitialized] = useState(false);
   const [categories, setCategories] = useState(CATEGORIES.filter(c => c !== "Todas"));
-  const btPrinter = useBTPrinter();
+  const btPrinter   = useBTPrinter();
+  const wifiPrinter = useWifiPrinter();
+  const [bizName, setBizName] = useState(() => localStorage.getItem("mi-pos-biz-name") || "MI POS");
 
   useEffect(() => {
     // Timeout fallback: if Firebase doesn't respond in 8s, stop loading
@@ -1918,10 +1996,10 @@ export default function App() {
           <button className="logout-btn" onClick={() => signOut(auth)}>Salir</button>
         </div>
         <div className="main">
-          {view === "sale" && <SaleView products={products} userProfile={userProfile} categories={categories} btPrinter={btPrinter} />}
+          {view === "sale" && <SaleView products={products} userProfile={userProfile} categories={categories} btPrinter={btPrinter} wifiPrinter={wifiPrinter} bizName={bizName} />}
           {view === "inventory" && <InventoryView products={products} userProfile={userProfile} categories={categories} />}
           {view === "history" && <HistoryView sales={sales} />}
-          {view === "reports" && <ReportsView sales={sales} products={products} btPrinter={btPrinter} />}
+          {view === "reports" && <ReportsView sales={sales} products={products} btPrinter={btPrinter} wifiPrinter={wifiPrinter} bizName={bizName} setBizName={setBizName} />}
           {view === "perms" && <PermissionsView />}
         </div>
         <nav className="bottom-nav">

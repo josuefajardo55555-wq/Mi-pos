@@ -1,0 +1,12 @@
+{
+  "name": "mi-pos-printer-proxy",
+  "version": "1.0.0",
+  "description": "Proxy WebSocket→TCP para impresora WiFi ESC/POS",
+  "main": "proxy.js",
+  "scripts": {
+    "start": "node proxy.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
