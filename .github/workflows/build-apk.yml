@@ -60,9 +60,20 @@ jobs:
               -dname "CN=Mi POS, OU=Debug, O=MiPOS, L=Buenos Aires, ST=Buenos Aires, C=AR"
           fi
 
-      - name: Construir APK
+      - name: Pre-configurar Bubblewrap (evitar prompts interactivos)
         run: |
-          printf "n\n${JAVA_HOME}\n" | bubblewrap build --skipPwaValidation
+          mkdir -p ~/.bubblewrap
+          cat > ~/.bubblewrap/config.json << EOF
+          {
+            "jdkPath": "${JAVA_HOME}",
+            "androidSdkPath": "${ANDROID_SDK_ROOT}"
+          }
+          EOF
+          echo "Bubblewrap config:"
+          cat ~/.bubblewrap/config.json
+
+      - name: Construir APK
+        run: bubblewrap build --skipPwaValidation
         env:
           BUBBLEWRAP_KEYSTORE_PASSWD: ${{ env.STORE_PASS }}
           BUBBLEWRAP_KEY_PASSWD:      ${{ env.KEY_PASS }}
