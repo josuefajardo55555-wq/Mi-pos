@@ -1,0 +1,37 @@
+{
+  "packageId": "app.mipos.josuequispe98",
+  "host": "pos-update--josuequispe98.replit.app",
+  "name": "Mi Punto de Venta",
+  "launcherName": "Mi POS",
+  "display": "standalone",
+  "orientation": "any",
+  "themeColor": "#00c896",
+  "backgroundColor": "#1a1f2e",
+  "startUrl": "/",
+  "iconUrl": "https://pos-update--josuequispe98.replit.app/icon-512.png",
+  "maskableIconUrl": "https://pos-update--josuequispe98.replit.app/icon-maskable.png",
+  "appVersion": "1",
+  "appVersionCode": 1,
+  "signingKey": {
+    "path": "./android.keystore",
+    "alias": "mi-pos"
+  },
+  "splashScreenFadeOutDuration": 300,
+  "enableNotifications": false,
+  "shortcuts": [
+    {
+      "name": "Nueva venta",
+      "shortName": "Venta",
+      "url": "/?tab=venta",
+      "iconUrl": "https://pos-update--josuequispe98.replit.app/icon-192.png"
+    }
+  ],
+  "webManifestUrl": "https://pos-update--josuequispe98.replit.app/manifest.json",
+  "generatorApp": "bubblewrap-cli",
+  "sdkVersion": "34.0.0",
+  "minSdkVersion": 21,
+  "appVersionName": "1.0.0",
+  "isChromeOSOnly": false,
+  "isMetaQuest": false,
+  "fullScopeUrl": "https://pos-update--josuequispe98.replit.app/"
+}
