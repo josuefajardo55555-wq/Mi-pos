@@ -81,9 +81,10 @@ jobs:
         working-directory: twa-project
         run: |
           mkfifo /tmp/bw-pipe
-          # Provide answers in order: (1) "n" = no regenerate, (2) keystore pwd, (3) key pwd
-          # sleep keeps write end open so stdin never closes during Gradle build
-          (printf "n\n${STORE_PASS}\n${KEY_PASS}\n"; sleep 1800) > /tmp/bw-pipe &
+          # Inquirer.js reads ahead eagerly: provide n + 6 rounds of passwords
+          # so even after early eager reads, real prompts still get answered.
+          # sleep 7200 keeps stdin open for the full Gradle build (never closes).
+          (printf "n\n${STORE_PASS}\n${KEY_PASS}\n${STORE_PASS}\n${KEY_PASS}\n${STORE_PASS}\n${KEY_PASS}\n"; sleep 7200) > /tmp/bw-pipe &
           FEEDER=$!
           bubblewrap build --skipPwaValidation < /tmp/bw-pipe
           EXIT_CODE=$?
