@@ -62,9 +62,7 @@ jobs:
 
       - name: Construir APK
         run: |
-          printf "n\n" | bubblewrap build \
-            --skipPwaValidation \
-            --jdkPath "$JAVA_HOME"
+          printf "n\n${JAVA_HOME}\n" | bubblewrap build --skipPwaValidation
         env:
           BUBBLEWRAP_KEYSTORE_PASSWD: ${{ env.STORE_PASS }}
           BUBBLEWRAP_KEY_PASSWD:      ${{ env.KEY_PASS }}
