@@ -77,26 +77,18 @@ jobs:
           echo "Contenido de twa-project:"
           ls -la twa-project/
 
-      - name: Instalar expect
-        run: sudo apt-get install -y expect
+      - name: Crear checksum twa-manifest para evitar prompts
+        working-directory: twa-project
+        run: |
+          # Bubblewrap busca twa-manifest.json.sha256 junto al manifiesto.
+          # Si el archivo existe y coincide, no pregunta "regenerar?" ni passwords.
+          sha256sum twa-manifest.json | awk '{print $1}' > twa-manifest.json.sha256
+          echo "Checksum generado:"
+          cat twa-manifest.json.sha256
 
       - name: Construir APK
         working-directory: twa-project
-        run: |
-          # Write expect script — bash expands ${STORE_PASS}/${KEY_PASS} here,
-          # so the file contains literal passwords and no shell variables remain.
-          cat > /tmp/build-apk.exp << EOF
-          set timeout 10800
-          spawn bubblewrap build --skipPwaValidation
-          expect -re {regenerate}
-          send "n\r"
-          expect -re {Password for the Key Store:}
-          send "${STORE_PASS}\r"
-          expect -re {Password for Key}
-          send "${KEY_PASS}\r"
-          expect eof
-          EOF
-          expect /tmp/build-apk.exp
+        run: bubblewrap build --skipPwaValidation
         env:
           BUBBLEWRAP_KEYSTORE_PASSWD: ${{ env.STORE_PASS }}
           BUBBLEWRAP_KEY_PASSWD:      ${{ env.KEY_PASS }}
