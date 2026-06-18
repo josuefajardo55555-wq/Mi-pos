@@ -37,29 +37,6 @@ jobs:
       - name: Instalar Bubblewrap CLI
         run: npm install -g @bubblewrap/cli@latest
 
-      - name: Preparar keystore de firma
-        run: |
-          STORE_PASS="${{ secrets.STORE_PASSWORD }}"
-          KEY_PASS="${{ secrets.KEY_PASSWORD }}"
-          STORE_PASS="${STORE_PASS:-mipos2024}"
-          KEY_PASS="${KEY_PASS:-mipos2024}"
-          echo "STORE_PASS=${STORE_PASS}" >> $GITHUB_ENV
-          echo "KEY_PASS=${KEY_PASS}"     >> $GITHUB_ENV
-
-          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
-            echo "Usando keystore de producción desde secrets..."
-            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android.keystore
-          else
-            echo "Generando keystore de debug (sideload)..."
-            keytool -genkeypair -v \
-              -keystore android.keystore \
-              -alias mi-pos \
-              -keyalg RSA -keysize 2048 -validity 10000 \
-              -storepass "${STORE_PASS}" \
-              -keypass  "${KEY_PASS}" \
-              -dname "CN=Mi POS, OU=Debug, O=MiPOS, L=Buenos Aires, ST=Buenos Aires, C=AR"
-          fi
-
       - name: Pre-configurar Bubblewrap (evitar prompts interactivos)
         run: |
           mkdir -p ~/.bubblewrap
@@ -72,8 +49,37 @@ jobs:
           echo "Bubblewrap config:"
           cat ~/.bubblewrap/config.json
 
+      - name: Preparar carpeta twa-project
+        run: |
+          mkdir -p twa-project
+          cp twa-manifest.json twa-project/
+
+          STORE_PASS="${{ secrets.STORE_PASSWORD }}"
+          KEY_PASS="${{ secrets.KEY_PASSWORD }}"
+          STORE_PASS="${STORE_PASS:-mipos2024}"
+          KEY_PASS="${KEY_PASS:-mipos2024}"
+          echo "STORE_PASS=${STORE_PASS}" >> $GITHUB_ENV
+          echo "KEY_PASS=${KEY_PASS}"     >> $GITHUB_ENV
+
+          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
+            echo "Usando keystore de producción desde secrets..."
+            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > twa-project/android.keystore
+          else
+            echo "Generando keystore de debug (sideload)..."
+            keytool -genkeypair -v \
+              -keystore twa-project/android.keystore \
+              -alias mi-pos \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "${STORE_PASS}" \
+              -keypass  "${KEY_PASS}" \
+              -dname "CN=Mi POS, OU=Debug, O=MiPOS, L=Buenos Aires, ST=Buenos Aires, C=AR"
+          fi
+          echo "Contenido de twa-project:"
+          ls -la twa-project/
+
       - name: Construir APK
-        run: yes "" | bubblewrap build --skipPwaValidation
+        working-directory: twa-project
+        run: echo "n" | bubblewrap build --skipPwaValidation
         env:
           BUBBLEWRAP_KEYSTORE_PASSWD: ${{ env.STORE_PASS }}
           BUBBLEWRAP_KEY_PASSWD:      ${{ env.KEY_PASS }}
@@ -86,6 +92,9 @@ jobs:
         with:
           name: mi-pos-apk-v${{ github.run_number }}
           path: |
+            twa-project/app-release-signed.apk
+            twa-project/app-release.apk
+            twa-project/*.apk
             app-release-signed.apk
             app-release.apk
             *.apk
