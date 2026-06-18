@@ -77,16 +77,28 @@ jobs:
           echo "Contenido de twa-project:"
           ls -la twa-project/
 
-      - name: Inicializar proyecto TWA
-        working-directory: twa-project
-        run: bubblewrap init --skipPwaValidation < /dev/null || true
+      - name: Instalar expect
+        run: sudo apt-get install -y expect
 
       - name: Construir APK
         working-directory: twa-project
-        run: bubblewrap build --skipPwaValidation
-        env:
-          BUBBLEWRAP_KEYSTORE_PASSWD: ${{ env.STORE_PASS }}
-          BUBBLEWRAP_KEY_PASSWD:      ${{ env.KEY_PASS }}
+        run: |
+          # Escribir el script SIN heredoc para evitar indentación de YAML
+          {
+            echo 'set timeout 10800'
+            echo 'spawn bubblewrap build --skipPwaValidation'
+            echo 'expect -re {regenerate}'
+            echo 'send "n\r"'
+            echo 'expect -re {Password for the Key Store:}'
+            printf 'send "%s\\r"\n' "${STORE_PASS}"
+            echo 'expect -re {Password for Key}'
+            printf 'send "%s\\r"\n' "${KEY_PASS}"
+            echo 'expect eof'
+          } > /tmp/bw.exp
+          echo "--- script expect ---"
+          cat /tmp/bw.exp
+          echo "---------------------"
+          expect /tmp/bw.exp
 
       - name: Buscar APK generado
         run: find . -name "*.apk" 2>/dev/null || echo "No se encontraron APKs"
