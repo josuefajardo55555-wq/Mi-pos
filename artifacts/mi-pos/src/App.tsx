@@ -1041,7 +1041,7 @@ function useWifiPrinter() {
     ws.onerror = () => {
       wsRef.current = null;
       setStatus("error");
-      setErrMsg("No se pudo conectar al proxy. Ejecutá printer-proxy/proxy.js en tu PC.");
+      setErrMsg("No se pudo conectar al proxy. Ejecutá printer-proxy/proxy.js en tu PC (impresora: 192.168.100.84:9100).");
       resolve(false);
     };
     ws.onclose = () => { wsRef.current = null; setStatus(s => s !== "error" ? "idle" : s); };

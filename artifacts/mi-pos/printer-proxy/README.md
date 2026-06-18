@@ -8,7 +8,7 @@ La app corre en HTTPS. Los navegadores no pueden abrir conexiones TCP directas a
 Este script crea un puente:
 
 ```
-App (HTTPS) → ws://localhost:9200 → TCP → 10.10.100.254:9100 → OCOM OCPP-80K
+App (HTTPS) → ws://localhost:9200 → TCP → 192.168.100.84:9100 → OCOM OCPP-80K
 ```
 
 ## Configuración de la impresora
@@ -16,7 +16,7 @@ App (HTTPS) → ws://localhost:9200 → TCP → 10.10.100.254:9100 → OCOM OCPP
 | Parámetro | Valor |
 |-----------|-------|
 | Modelo    | OCOM OCPP-80K-URLW |
-| IP        | 10.10.100.254 |
+| IP        | 192.168.100.84 |
 | Puerto    | 9100 (RAW TCP) |
 | Papel     | 80 mm |
 | Protocolo | ESC/POS |

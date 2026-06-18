@@ -11,7 +11,7 @@ const { WebSocketServer } = require("ws");
 const net = require("net");
 
 const WS_PORT      = 9200;
-const PRINTER_IP   = "10.10.100.254";
+const PRINTER_IP   = "192.168.100.84";
 const PRINTER_PORT = 9100;
 
 const wss = new WebSocketServer({ host: "127.0.0.1", port: WS_PORT });
