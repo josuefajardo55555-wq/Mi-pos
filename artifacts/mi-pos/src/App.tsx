@@ -1136,7 +1136,7 @@ function useBTPrinter(){
 }
 
 // ─── WiFi printer hook ────────────────────────────────────────────────────────
-const WIFI_HTTP_URL = "http://10.0.0.106:3000/imprimir";
+const WIFI_HTTP_URL = "http://10.0.0.100:3000/imprimir";
 
 /** Convierte Uint8Array a base64 para el bridge Android o el servidor HTTP local */
 function toBase64(bytes: Uint8Array): string {
