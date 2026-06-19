@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, createContext, useContext } from "react";
 import {
   ResponsiveContainer, LineChart, Line, BarChart, Bar,
   PieChart, Pie, Cell, XAxis, YAxis, Tooltip, CartesianGrid, Legend
@@ -17,6 +17,13 @@ import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 
 const CATEGORIES = ["Todas", "Lácteos", "Básicos", "Aceites", "Panadería", "Snacks", "Enlatados", "Bebidas", "Frutas y Verd.", "Higiene", "Limpieza"];
 const fmt = (n) => `$${Number(n).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+const LOCALS = [
+  { id: "local1",          name: "Local 1" },
+  { id: "local-godoy-cruz", name: "Local Godoy Cruz" },
+];
+
+const LocalCtx = createContext("local1");
 
 const INITIAL_PRODUCTS = [
   { id: "p1", name: "Leche La Serenísima 1L", category: "Lácteos", type: "unit", price: 850, stock: 30, unit: "pza", barcode: "7790070010015", img: "" },
@@ -57,6 +64,14 @@ const css = `
   .role-owner { background: #fbbf2422; color: #fbbf24; border: 1px solid #fbbf2444; }
   .role-collab { background: #60a5fa22; color: #60a5fa; border: 1px solid #60a5fa44; }
   .logout-btn { background: none; border: 1px solid #3a4158; border-radius: 6px; padding: 4px 8px; color: #6b7280; font-size: 11px; cursor: pointer; font-family: 'Inter', sans-serif; }
+  .local-selector { position: relative; display: flex; align-items: center; gap: 2px; background: #1e3a2f; border: 1px solid #00c89644; border-radius: 8px; padding: 4px 8px; cursor: pointer; font-size: 12px; color: #00c896; font-weight: 600; user-select: none; flex-shrink: 0; }
+  .local-selector:hover { background: #1e4a3a; }
+  .local-selector-label { white-space: nowrap; max-width: 110px; overflow: hidden; text-overflow: ellipsis; }
+  .local-dropdown { position: absolute; top: calc(100% + 4px); left: 0; min-width: 160px; background: #1e2438; border: 1px solid #2a3045; border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.4); z-index: 200; overflow: hidden; }
+  .local-option { padding: 10px 14px; font-size: 13px; color: #c9cdd6; cursor: pointer; transition: background .1s; }
+  .local-option:hover { background: #252b3b; }
+  .local-option.active { color: #00c896; background: #1e3a2f; font-weight: 700; }
+  .local-badge { font-size: 11px; color: #60a5fa; background: #1e2a4a; border: 1px solid #3a5168; border-radius: 8px; padding: 3px 8px; white-space: nowrap; flex-shrink: 0; }
   .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: #141824; border-top: 1px solid #2a3045; z-index: 50; display: flex; justify-content: space-around; padding: 6px 0 10px; }
   .bn-btn { display: flex; flex-direction: column; align-items: center; gap: 2px; background: none; border: none; color: #6b7280; font-size: 10px; cursor: pointer; padding: 4px 10px; font-family: 'Inter', sans-serif; }
   .bn-btn .bn-icon { font-size: 20px; }
@@ -536,11 +551,12 @@ function OffModal({ barcode, offName, offBrand, offImg, found, categories, onClo
 
   const valid = name.trim().length > 0 && parseFloat(price) > 0;
 
+  const localId = useContext(LocalCtx);
   const handleAdd = async () => {
     if (!valid || saving) return;
     setSaving(true);
     try {
-      await addDoc(collection(db, "products"), {
+      await addDoc(collection(db, "locals", localId, "products"), {
         barcode:  barcode || null,
         name:     name.trim(),
         category: cat || "General",
@@ -1538,13 +1554,14 @@ function SaleView({ products, userProfile, categories, btPrinter, wifiPrinter, b
   const updateQty = (id, val) => { const n = parseFloat(val); if (isNaN(n) || n <= 0) return setCart(c => c.filter(i => i.id !== id)); setCart(c => c.map(i => i.id === id ? { ...i, qty: n } : i)); };
   const total = cart.reduce((s, i) => s + i.price * i.qty, 0);
 
+  const localId = useContext(LocalCtx);
   const handlePay = async (method, received, change) => {
     const saleData = { method, received, change, total, items: cart.map(i => ({ id: i.id, name: i.name, price: i.price, qty: i.qty, unit: i.unit })), date: serverTimestamp(), cashier: userProfile?.email || "" };
-    const saleRef = await addDoc(collection(db, "sales"), saleData);
+    const saleRef = await addDoc(collection(db, "locals", localId, "sales"), saleData);
     // Update stock
     for (const item of cart) {
       const newStock = Math.max(0, (item.stock || 0) - item.qty);
-      await updateDoc(doc(db, "products", item.id), { stock: newStock });
+      await updateDoc(doc(db, "locals", localId, "products", item.id), { stock: newStock });
     }
     setSuccessModal({ ...saleData, id: saleRef.id });
     setCart([]);
@@ -1678,10 +1695,11 @@ function CategoriesModal({ categories, onClose }) {
   const [newCat, setNewCat]   = useState("");
   const [editing, setEditing] = useState(null); // { idx, value }
   const [saving, setSaving]   = useState(false);
+  const localId = useContext(LocalCtx);
 
   const persist = async (newList) => {
     setSaving(true);
-    await setDoc(doc(db, "settings", "categories"), { list: newList });
+    await setDoc(doc(db, "locals", localId, "settings", "categories"), { list: newList });
     setSaving(false);
   };
 
@@ -1771,19 +1789,20 @@ function InventoryView({ products, userProfile, categories }) {
   const [importing, setImporting] = useState(false);
   const [importMsg, setImportMsg] = useState(null); // {ok, skipped, error?}
   const importRef                 = useRef(null);
+  const localId = useContext(LocalCtx);
   const canEdit = userProfile?.role === "owner" || userProfile?.permissions?.editInventory;
 
   const filtered = products.filter(p => p.name.toLowerCase().includes(search.toLowerCase()) || (p.barcode && p.barcode.includes(search)));
 
   const handleSave = async (p) => {
     const { id, ...data } = p;
-    if (id) await setDoc(doc(db, "products", id), data);
-    else await addDoc(collection(db, "products"), data);
+    if (id) await setDoc(doc(db, "locals", localId, "products", id), data);
+    else await addDoc(collection(db, "locals", localId, "products"), data);
     setModal(null);
   };
 
   const handleDelete = async (id) => {
-    if (confirm("¿Eliminar este producto?")) await deleteDoc(doc(db, "products", id));
+    if (confirm("¿Eliminar este producto?")) await deleteDoc(doc(db, "locals", localId, "products", id));
   };
 
   const handleImport = async (e) => {
@@ -1825,7 +1844,7 @@ function InventoryView({ products, userProfile, categories }) {
 
       // Insert one by one (Firestore batches are capped at 500; for large sets this is fine)
       for (const data of toInsert) {
-        await addDoc(collection(db, "products"), data);
+        await addDoc(collection(db, "locals", localId, "products"), data);
       }
 
       setImportMsg({ ok: toInsert.length, skipped: skipped.length });
@@ -2653,6 +2672,10 @@ function PermissionsView() {
     await updateDoc(doc(db, "users", userId), { [`permissions.${perm}`]: !current });
   };
 
+  const assignLocal = async (userId, localId) => {
+    await updateDoc(doc(db, "users", userId), { localId });
+  };
+
   const perms = [
     { key: "sell", label: "Registrar ventas" },
     { key: "viewInventory", label: "Ver inventario" },
@@ -2668,6 +2691,16 @@ function PermissionsView() {
           <div key={u.id} className="perm-card">
             <div className="perm-email">👤 {u.name || u.email}</div>
             <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 8 }}>{u.email}</div>
+            <div className="perm-toggle" style={{ marginBottom: 4 }}>
+              <span style={{ fontWeight: 600 }}>🏪 Local asignado</span>
+              <select
+                value={u.localId || "local1"}
+                onChange={e => assignLocal(u.id, e.target.value)}
+                style={{ background: "#252b3b", border: "1px solid #3a4158", borderRadius: 6, color: "#e8eaf0", padding: "4px 8px", fontSize: 12, cursor: "pointer" }}
+              >
+                {LOCALS.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+              </select>
+            </div>
             {perms.map(p => (
               <div key={p.key} className="perm-toggle">
                 <span>{p.label}</span>
@@ -2698,6 +2731,8 @@ export default function App() {
   const btPrinter   = useBTPrinter();
   const wifiPrinter = useWifiPrinter();
   const [bizName, setBizName] = useState(() => localStorage.getItem("mi-pos-biz-name") || "MI POS");
+  const [activeLocal, setActiveLocal] = useState(() => localStorage.getItem("mi-pos-active-local") || "local1");
+  const [localMenuOpen, setLocalMenuOpen] = useState(false);
 
   useEffect(() => {
     // Timeout fallback: if Firebase doesn't respond in 8s, stop loading
@@ -2755,15 +2790,20 @@ export default function App() {
     return () => { clearTimeout(timeout); unsub(); };
   }, []);
 
+  // Derive the effective local: owner uses their selected local; collaborators use their assigned local
+  const isOwnerEarly = userProfile?.role === "owner";
+  const effectiveLocal = isOwnerEarly ? activeLocal : (userProfile?.localId || "local1");
+
   // Load products from Firestore
   useEffect(() => {
-    if (!user) return;
-    const unsub = onSnapshot(collection(db, "products"), async (snap) => {
-      if (snap.empty && !initialized) {
-        // Seed initial products
+    if (!user || !effectiveLocal) return;
+    setProducts([]);
+    const unsub = onSnapshot(collection(db, "locals", effectiveLocal, "products"), async (snap) => {
+      if (snap.empty && !initialized && effectiveLocal === "local1") {
+        // Seed initial products only for local1 on first run
         for (const p of INITIAL_PRODUCTS) {
           const { id, ...data } = p;
-          await setDoc(doc(db, "products", id), data);
+          await setDoc(doc(db, "locals", effectiveLocal, "products", id), data);
         }
         setInitialized(true);
       } else {
@@ -2772,32 +2812,33 @@ export default function App() {
       }
     });
     return unsub;
-  }, [user]);
+  }, [user, effectiveLocal]);
 
   // Load sales
   useEffect(() => {
-    if (!user) return;
-    const q = query(collection(db, "sales"), orderBy("date", "desc"));
+    if (!user || !effectiveLocal) return;
+    setSales([]);
+    const q = query(collection(db, "locals", effectiveLocal, "sales"), orderBy("date", "desc"));
     const unsub = onSnapshot(q, snap => {
       setSales(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
     return unsub;
-  }, [user]);
+  }, [user, effectiveLocal]);
 
   // Load categories from Firestore (real-time); seed defaults if first run
   useEffect(() => {
-    if (!user) return;
-    const unsub = onSnapshot(doc(db, "settings", "categories"), (snap) => {
+    if (!user || !effectiveLocal) return;
+    const unsub = onSnapshot(doc(db, "locals", effectiveLocal, "settings", "categories"), (snap) => {
       if (snap.exists()) {
         setCategories(snap.data().list || []);
       } else {
         const defaults = CATEGORIES.filter(c => c !== "Todas");
-        setDoc(doc(db, "settings", "categories"), { list: defaults });
+        setDoc(doc(db, "locals", effectiveLocal, "settings", "categories"), { list: defaults });
         setCategories(defaults);
       }
     });
     return unsub;
-  }, [user]);
+  }, [user, effectiveLocal]);
 
   if (authLoading) return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "#1a1f2e", color: "#00c896", gap: 12 }}>
@@ -2811,6 +2852,7 @@ export default function App() {
   const perms = userProfile?.permissions || {};
 
   const canUseAI = isOwner || perms.sell || perms.viewReports || perms.viewInventory;
+  const activeLocalName = LOCALS.find(l => l.id === effectiveLocal)?.name || effectiveLocal;
 
   const navItems = [
     { id: "sale",      icon: "🛒", label: "Venta",      show: perms.sell || isOwner },
@@ -2823,14 +2865,38 @@ export default function App() {
 
   const titles = { sale: "Mi POS 2", inventory: "Inventario", history: "Historial", reports: "Reportes", perms: "Mi Equipo", ai: "Asistente IA" };
 
+  const switchLocal = (id) => {
+    setActiveLocal(id);
+    localStorage.setItem("mi-pos-active-local", id);
+    setLocalMenuOpen(false);
+    setInitialized(false);
+  };
+
   return (
-    <>
+    <LocalCtx.Provider value={effectiveLocal}>
       <style>{css}</style>
-      <div className="app">
+      <div className="app" onClick={() => localMenuOpen && setLocalMenuOpen(false)}>
         <div className="top-header">
           <div className="logo">PV</div>
           <h1>{titles[view]}</h1>
-          <span className={`role-badge ${isOwner ? "role-owner" : "role-collab"}`}>{isOwner ? "👑 Propietario" : "👤 Colaborador"}</span>
+          {isOwner ? (
+            <div className="local-selector" onClick={e => { e.stopPropagation(); setLocalMenuOpen(o => !o); }}>
+              <span className="local-selector-label">🏪 {activeLocalName}</span>
+              <span style={{ fontSize: 10, marginLeft: 2 }}>▾</span>
+              {localMenuOpen && (
+                <div className="local-dropdown">
+                  {LOCALS.map(l => (
+                    <div key={l.id} className={`local-option${effectiveLocal === l.id ? " active" : ""}`} onClick={() => switchLocal(l.id)}>
+                      {effectiveLocal === l.id ? "✓ " : ""}{l.name}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <span className="local-badge">🏪 {activeLocalName}</span>
+          )}
+          <span className={`role-badge ${isOwner ? "role-owner" : "role-collab"}`}>{isOwner ? "👑" : "👤"}</span>
           <button className="logout-btn" onClick={() => signOut(auth)}>Salir</button>
         </div>
         <div className="main">
@@ -2845,6 +2911,6 @@ export default function App() {
           {navItems.map(n => <button key={n.id} className={`bn-btn${view === n.id ? " active" : ""}`} onClick={() => setView(n.id)}><span className="bn-icon">{n.icon}</span>{n.label}</button>)}
         </nav>
       </div>
-    </>
+    </LocalCtx.Provider>
   );
 }

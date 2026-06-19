@@ -1,1 +1,2 @@
 - [AI Chat integration](ai-chat.md) — endpoint /api/chat SSE streaming, no zod in api-server routes (esbuild can't resolve zod/v4 subpath), use manual validation instead.
+- [Multi-local architecture](multi-local.md) — LocalCtx context propaga localId; rutas Firestore = locals/{localId}/...; colaboradores tienen localId en su doc de users
