@@ -1136,9 +1136,9 @@ function useBTPrinter(){
 }
 
 // ─── WiFi printer hook ────────────────────────────────────────────────────────
-const WIFI_PROXY_URL = "ws://localhost:9200";
+const WIFI_HTTP_URL = "http://localhost:9200/imprimir";
 
-/** Convierte Uint8Array a base64 para el bridge Android */
+/** Convierte Uint8Array a base64 para el bridge Android o el servidor HTTP local */
 function toBase64(bytes: Uint8Array): string {
   let bin = "";
   for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
@@ -1153,65 +1153,40 @@ function hasAndroidBridge(): boolean {
 
 function useWifiPrinter() {
   const [status, setStatus] = useState("idle");
-  const [errMsg,  setErrMsg]  = useState("");
-  const wsRef = useRef(null);
+  const [errMsg, setErrMsg] = useState("");
 
-  const connect = () => new Promise((resolve) => {
-    // Si hay bridge nativo no necesitamos WebSocket
-    if (hasAndroidBridge()) { resolve(true); return; }
-    if (wsRef.current?.readyState === WebSocket.OPEN) { resolve(true); return; }
-    setStatus("connecting"); setErrMsg("");
-    const ws = new WebSocket(WIFI_PROXY_URL);
-    ws.binaryType = "arraybuffer";
-    ws.onopen  = () => { wsRef.current = ws; setStatus("connected"); resolve(true); };
-    ws.onerror = () => {
-      wsRef.current = null;
-      setStatus("error");
-      setErrMsg("No se pudo conectar al proxy. Ejecutá printer-proxy/proxy.js en tu PC (impresora: 192.168.100.84:9100).");
-      resolve(false);
-    };
-    ws.onclose = () => { wsRef.current = null; setStatus(s => s !== "error" ? "idle" : s); };
-    ws.onmessage = (e) => {
-      try {
-        const txt = typeof e.data === "string" ? e.data : new TextDecoder().decode(e.data);
-        const d = JSON.parse(txt);
-        if (d.error) { setStatus("error"); setErrMsg(d.error); }
-      } catch {}
-    };
-  });
-
-  const disconnect = () => {
-    if (hasAndroidBridge()) return; // bridge nativo no tiene conexión que cerrar
-    wsRef.current?.close();
-    wsRef.current = null;
-    setStatus("idle"); setErrMsg("");
-  };
+  // HTTP es stateless — no hay conexión persistente que manejar
+  const connect = async () => true;
+  const disconnect = () => { setStatus("idle"); setErrMsg(""); };
 
   const print = async (bytes: Uint8Array) => {
-    // ── Camino 1: bridge nativo de la APK ──────────────────────────────────
+    // ── Camino 1: bridge nativo de la APK (window.AndroidPrinter) ──────────
     if (hasAndroidBridge()) {
       setStatus("printing");
       try {
         (window as any).AndroidPrinter.imprimir(toBase64(bytes));
         await new Promise(r => setTimeout(r, 400));
-        setStatus("connected");
+        setStatus("idle");
       } catch (err: any) {
         setStatus("error");
         setErrMsg(err.message || String(err));
       }
       return;
     }
-    // ── Camino 2: proxy WebSocket en la PC (fallback) ──────────────────────
-    const ok = await connect();
-    if (!ok) return;
+    // ── Camino 2: servidor HTTP local en el celular (localhost:9200) ────────
     setStatus("printing");
     try {
-      wsRef.current.send(bytes);
-      await new Promise(r => setTimeout(r, 800));
-      setStatus("connected");
+      const res = await fetch(WIFI_HTTP_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain" },
+        body: toBase64(bytes),
+      });
+      if (!res.ok) throw new Error(`Error HTTP ${res.status}`);
+      await new Promise(r => setTimeout(r, 400));
+      setStatus("idle");
     } catch (err: any) {
       setStatus("error");
-      setErrMsg(err.message || String(err));
+      setErrMsg(`No se pudo imprimir (${err.message || err}). Verificá que el servidor de impresión esté activo.`);
     }
   };
 
@@ -1391,30 +1366,11 @@ function AIChat({ products, sales, bizName, userProfile, onClose }) {
 
 // ─── SuccessModal ──────────────────────────────────────────────────────────────
 function SuccessModal({ sale, onClose, btPrinter, wifiPrinter, bizName }) {
-  const [httpStatus, setHttpStatus] = useState<"idle"|"printing"|"ok"|"error">("idle");
-
   useEffect(() => {
     // Auto-print via WiFi as soon as the modal appears
     wifiPrinter.print(buildTicket(sale, bizName || "MI POS"));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  async function printViaHttp() {
-    setHttpStatus("printing");
-    try {
-      const bytes = buildTicket(sale, bizName || "MI POS");
-      await fetch("http://192.168.100.80:3000/imprimir", {
-        method: "POST",
-        headers: { "Content-Type": "application/octet-stream" },
-        body: bytes,
-      });
-      setHttpStatus("ok");
-      setTimeout(() => setHttpStatus("idle"), 3000);
-    } catch {
-      setHttpStatus("error");
-      setTimeout(() => setHttpStatus("idle"), 3000);
-    }
-  }
 
   return (
     <div className="modal-overlay">
@@ -1426,25 +1382,6 @@ function SuccessModal({ sale, onClose, btPrinter, wifiPrinter, bizName }) {
           <div className="success-row"><span>Método</span><span>{sale.method}</span></div>
           {sale.method === "Efectivo" && <><div className="success-row"><span>Recibido</span><span>{fmt(sale.received)}</span></div><div className="success-row"><span>Vuelto</span><span>{fmt(Math.max(0, sale.change))}</span></div></>}
           <div className="success-row"><span>Total</span><span>{fmt(sale.total)}</span></div>
-        </div>
-        <div style={{ marginBottom: 8 }}>
-          <div style={{ fontSize: 10, color: "#9ca3af", textAlign: "left", marginBottom: 4, fontWeight: 600 }}>Red local — 192.168.100.80</div>
-          <button
-            onClick={printViaHttp}
-            disabled={httpStatus === "printing"}
-            style={{
-              width: "100%", padding: "10px 0", borderRadius: 8, border: "none", cursor: httpStatus === "printing" ? "default" : "pointer",
-              fontWeight: 600, fontSize: 14,
-              background: httpStatus === "ok" ? "#065f46" : httpStatus === "error" ? "#7f1d1d" : "#1e293b",
-              color: httpStatus === "ok" ? "#6ee7b7" : httpStatus === "error" ? "#fca5a5" : "#f1f5f9",
-              display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-            }}
-          >
-            {httpStatus === "idle"     && <><span>🖨️</span> Imprimir ticket</>}
-            {httpStatus === "printing" && <><span style={{ animation: "spin 1s linear infinite", display:"inline-block" }}>⏳</span> Enviando...</>}
-            {httpStatus === "ok"       && <><span>✅</span> Ticket enviado</>}
-            {httpStatus === "error"    && <><span>⚠️</span> Error al imprimir</>}
-          </button>
         </div>
         <div style={{ marginBottom: 4 }}>
           <div style={{ fontSize: 10, color: "#9ca3af", textAlign: "left", marginBottom: 4, fontWeight: 600 }}>WiFi — OCOM</div>
@@ -2676,7 +2613,7 @@ function ReportsView({ sales, products, btPrinter, wifiPrinter, bizName, setBizN
               <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 5, marginTop: 10, fontWeight: 600 }}>📡 WiFi — OCOM OCPP-80K</div>
               <PrintBtn label="Ventas del día" onPrint={() => wifiPrinter.print(buildSalesReport(sales, bizName))} printer={wifiPrinter} />
               <PrintBtn label="Stock bajo" onPrint={() => wifiPrinter.print(buildLowStockReport(products, bizName))} printer={wifiPrinter} />
-              <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4, lineHeight: 1.5 }}>Necesita printer-proxy/proxy.js corriendo en la PC local.</div>
+              <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4, lineHeight: 1.5 }}>Envía los datos a localhost:9200/imprimir (servidor en la APK).</div>
               <div style={{ fontSize: 11, color: "#9ca3af", margin: "10px 0 5px", fontWeight: 600 }}>🔵 Bluetooth</div>
               <PrintBtn label="Ventas del día" onPrint={() => btPrinter.print(buildSalesReport(sales, bizName))} printer={btPrinter} />
               <PrintBtn label="Stock bajo" onPrint={() => btPrinter.print(buildLowStockReport(products, bizName))} printer={btPrinter} />
