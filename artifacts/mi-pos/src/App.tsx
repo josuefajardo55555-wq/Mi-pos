@@ -1,5 +1,9 @@
 // @ts-nocheck
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
+import {
+  ResponsiveContainer, LineChart, Line, BarChart, Bar,
+  PieChart, Pie, Cell, XAxis, YAxis, Tooltip, CartesianGrid, Legend
+} from "recharts";
 import { db, auth, storage } from "./firebase";
 import {
   collection, doc, onSnapshot, setDoc, deleteDoc, addDoc,
@@ -249,6 +253,55 @@ const css = `
   .bt-error { margin-top:6px; padding:8px 10px; background:#2d1515; border:1px solid #7f1d1d; border-radius:8px; color:#fca5a5; font-size:11px; line-height:1.5; }
   .print-section { background:#1e2438; border:1px solid #3a4158; border-radius:10px; padding:12px; margin-bottom:10px; }
   .print-section h3 { font-size:12px; font-weight:600; margin-bottom:10px; color:#9ca3af; }
+  /* ─── Reportes e Inteligencia ─── */
+  .ri-wrap { flex:1; display:flex; flex-direction:column; overflow:hidden; }
+  .ri-tabs { display:flex; overflow-x:auto; background:#141824; border-bottom:1px solid #2a3045; flex-shrink:0; }
+  .ri-tabs::-webkit-scrollbar { height:0; }
+  .ri-tab { flex-shrink:0; padding:10px 14px; font-size:11px; font-weight:600; color:#6b7280; border:none; background:none; cursor:pointer; border-bottom:2px solid transparent; font-family:'Inter',sans-serif; white-space:nowrap; }
+  .ri-tab.active { color:#00c896; border-bottom-color:#00c896; }
+  .ri-filter-bar { display:flex; gap:6px; overflow-x:auto; padding:10px 12px; flex-shrink:0; border-bottom:1px solid #2a3045; background:#1a1f2e; }
+  .ri-filter-bar::-webkit-scrollbar { height:0; }
+  .ri-fbtn { padding:5px 12px; border-radius:14px; border:1px solid #3a4158; background:none; color:#9ca3af; font-size:11px; font-weight:600; cursor:pointer; white-space:nowrap; font-family:'Inter',sans-serif; }
+  .ri-fbtn.active { background:#1e3a2f; border-color:#00c896; color:#00c896; }
+  .ri-fbtn-custom { padding:5px 8px; }
+  .ri-custom-dates { display:flex; gap:6px; align-items:center; padding:0 12px 8px; flex-shrink:0; }
+  .ri-custom-dates input { background:#252b3b; border:1px solid #3a4158; border-radius:8px; padding:5px 8px; color:#e8eaf0; font-size:12px; outline:none; font-family:'Inter',sans-serif; }
+  .ri-custom-dates input:focus { border-color:#00c896; }
+  .ri-scroll { flex:1; overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:12px; }
+  .ri-kpi-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .ri-kpi { background:#252b3b; border:1px solid #3a4158; border-radius:12px; padding:12px; }
+  .ri-kpi-label { font-size:10px; color:#6b7280; font-weight:500; text-transform:uppercase; letter-spacing:.4px; margin-bottom:4px; }
+  .ri-kpi-value { font-size:18px; font-weight:700; font-family:monospace; }
+  .ri-kpi-delta { font-size:10px; margin-top:3px; }
+  .ri-kpi-delta.up { color:#00c896; }
+  .ri-kpi-delta.down { color:#ff6b6b; }
+  .ri-kpi-delta.flat { color:#6b7280; }
+  .ri-card { background:#252b3b; border:1px solid #3a4158; border-radius:12px; padding:12px; }
+  .ri-card h3 { font-size:12px; font-weight:700; margin-bottom:10px; color:#e8eaf0; }
+  .ri-chart-wrap { width:100%; margin-top:4px; }
+  .ri-list { display:flex; flex-direction:column; gap:6px; }
+  .ri-item { display:flex; align-items:center; gap:8px; padding:7px 0; border-bottom:1px solid #2a3045; }
+  .ri-item:last-child { border-bottom:none; }
+  .ri-item-rank { width:20px; font-size:11px; font-weight:700; color:#6b7280; text-align:center; flex-shrink:0; }
+  .ri-item-name { flex:1; font-size:12px; font-weight:500; color:#e8eaf0; }
+  .ri-item-val { font-size:12px; font-weight:700; font-family:monospace; color:#00c896; }
+  .ri-item-sub { font-size:10px; color:#6b7280; }
+  .ri-item-bar { height:4px; background:#3a4158; border-radius:2px; margin-top:2px; }
+  .ri-item-bar-fill { height:4px; background:linear-gradient(90deg,#00c896,#00a87a); border-radius:2px; }
+  .ri-badge { display:inline-flex; align-items:center; gap:4px; background:#1e3a2f; border:1px solid #00c89644; border-radius:8px; padding:4px 8px; font-size:11px; color:#00c896; font-weight:600; }
+  .ri-badge.warn { background:#3a2a1e; border-color:#fb923c44; color:#fb923c; }
+  .ri-badge.danger { background:#3b1818; border-color:#ff6b6b44; color:#ff6b6b; }
+  .ri-star-card { background:linear-gradient(135deg,#1e3a2f,#1a2f25); border:1px solid #00c89655; border-radius:12px; padding:12px; }
+  .ri-star-card h3 { font-size:11px; color:#00c896; font-weight:600; margin-bottom:6px; text-transform:uppercase; letter-spacing:.4px; }
+  .ri-star-name { font-size:15px; font-weight:700; color:#e8eaf0; margin-bottom:2px; }
+  .ri-star-val { font-size:12px; font-family:monospace; color:#00c896; }
+  .ri-empty { color:#6b7280; font-size:12px; text-align:center; padding:16px 0; }
+  .ri-methods-row { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid #2a3045; }
+  .ri-methods-row:last-child { border-bottom:none; }
+  .ri-methods-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
+  .ri-methods-name { flex:1; font-size:12px; color:#e8eaf0; }
+  .ri-methods-pct { font-size:11px; color:#6b7280; }
+  .ri-methods-val { font-size:12px; font-weight:700; font-family:monospace; color:#00c896; }
   /* Login */
   .login-screen { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; background: #1a1f2e; }
   .login-box { background: #1e2438; border: 1px solid #3a4158; border-radius: 20px; padding: 28px 24px; width: 100%; max-width: 380px; }
@@ -1966,71 +2019,623 @@ function HistoryView({ sales }) {
 }
 
 // ─── ReportsView ──────────────────────────────────────────────────────────────
+const CHART_COLORS = ["#00c896","#60a5fa","#fb923c","#a78bfa","#fbbf24","#f472b6","#34d399","#f87171"];
+const DAY_NAMES = ["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"];
+const FULL_DAY_NAMES = ["Domingo","Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"];
+const TIME_SLOTS = [
+  { label: "Mañana\n6-12h",  key: "manana",  min: 6,  max: 12 },
+  { label: "Mediodía\n12-15h", key: "mediodia", min: 12, max: 15 },
+  { label: "Tarde\n15-20h", key: "tarde",   min: 15, max: 20 },
+  { label: "Noche\n20-24h", key: "noche",   min: 20, max: 24 },
+];
+
+function parseDate(sale) {
+  try {
+    if (sale.date?.seconds) return new Date(sale.date.seconds * 1000);
+    if (sale.date?.toDate) return sale.date.toDate();
+    if (sale.date) return new Date(sale.date);
+  } catch {}
+  return null;
+}
+
+function startOf(unit, ref = new Date()) {
+  const d = new Date(ref);
+  if (unit === "day")   { d.setHours(0,0,0,0); return d; }
+  if (unit === "week")  { d.setHours(0,0,0,0); d.setDate(d.getDate() - d.getDay()); return d; }
+  if (unit === "month") { d.setHours(0,0,0,0); d.setDate(1); return d; }
+  if (unit === "year")  { d.setHours(0,0,0,0); d.setMonth(0,1); return d; }
+  return d;
+}
+
+function filterByRange(sales, range, from, to) {
+  const now = new Date();
+  let start, end;
+  if (range === "hoy")   { start = startOf("day"); end = now; }
+  else if (range === "semana") { start = startOf("week"); end = now; }
+  else if (range === "mes")    { start = startOf("month"); end = now; }
+  else if (range === "año")    { start = startOf("year"); end = now; }
+  else { // custom
+    start = from ? new Date(from + "T00:00:00") : new Date(0);
+    end   = to   ? new Date(to   + "T23:59:59") : now;
+  }
+  return sales.filter(s => { const d = parseDate(s); return d && d >= start && d <= end; });
+}
+
+function prevPeriodSales(sales, range) {
+  const now = new Date();
+  let start, end;
+  if (range === "hoy") {
+    end   = startOf("day");
+    start = new Date(end.getTime() - 86400000);
+  } else if (range === "semana") {
+    end   = startOf("week");
+    start = new Date(end.getTime() - 7 * 86400000);
+  } else if (range === "mes") {
+    end   = startOf("month");
+    const prev = new Date(end); prev.setMonth(prev.getMonth() - 1);
+    start = startOf("month", prev);
+  } else if (range === "año") {
+    end   = startOf("year");
+    const prev = new Date(end); prev.setFullYear(prev.getFullYear() - 1);
+    start = startOf("year", prev);
+  } else return [];
+  return sales.filter(s => { const d = parseDate(s); return d && d >= start && d < end; });
+}
+
+function pct(curr, prev) {
+  if (prev === 0 && curr === 0) return null;
+  if (prev === 0) return "+100";
+  const v = ((curr - prev) / prev) * 100;
+  return (v >= 0 ? "+" : "") + v.toFixed(1);
+}
+
+const RiTooltip = ({ active, payload, label, money }) => {
+  if (!active || !payload?.length) return null;
+  return (
+    <div style={{ background:"#1e2438", border:"1px solid #3a4158", borderRadius:8, padding:"6px 10px", fontSize:11 }}>
+      <div style={{ color:"#9ca3af", marginBottom:2 }}>{label}</div>
+      {payload.map((p, i) => (
+        <div key={i} style={{ color: p.color || "#00c896", fontWeight:600 }}>
+          {money ? fmt(p.value) : p.value}
+        </div>
+      ))}
+    </div>
+  );
+};
+
 function ReportsView({ sales, products, btPrinter, wifiPrinter, bizName, setBizName }) {
-  const totalVentas = sales.reduce((s, v) => s + v.total, 0);
-  const totalItems = sales.reduce((s, v) => s + (v.items || []).reduce((ss, i) => ss + i.qty, 0), 0);
-  const methods = sales.reduce((acc, v) => { acc[v.method] = (acc[v.method] || 0) + v.total; return acc; }, {});
-  const topProducts = Object.values(sales.flatMap(v => v.items || []).reduce((acc, i) => {
-    acc[i.id] = acc[i.id] || { name: i.name, total: 0 };
-    acc[i.id].total += i.price * i.qty;
+  const [tab, setTab]         = useState("dashboard");
+  const [range, setRange]     = useState("mes");
+  const [customFrom, setFrom] = useState("");
+  const [customTo,   setTo]   = useState("");
+
+  const filtered = useMemo(() => filterByRange(sales, range, customFrom, customTo), [sales, range, customFrom, customTo]);
+  const prev     = useMemo(() => prevPeriodSales(sales, range), [sales, range]);
+
+  // ── KPIs ────────────────────────────────────────────────────────────────────
+  const totalRev  = filtered.reduce((s, v) => s + (v.total || 0), 0);
+  const prevRev   = prev.reduce((s, v) => s + (v.total || 0), 0);
+  const txCount   = filtered.length;
+  const prevTx    = prev.length;
+  const avgTicket = txCount > 0 ? totalRev / txCount : 0;
+  const prevAvg   = prevTx  > 0 ? prevRev  / prevTx  : 0;
+  const totalItems = filtered.reduce((s, v) => s + (v.items||[]).reduce((ss, i) => ss + (i.qty||0), 0), 0);
+
+  // ── Ventas por día de semana ─────────────────────────────────────────────
+  const byDow = useMemo(() => {
+    const acc = Array.from({length:7}, (_,i) => ({ name: DAY_NAMES[i], monto: 0, txn: 0 }));
+    filtered.forEach(s => { const d = parseDate(s); if (d) { acc[d.getDay()].monto += s.total||0; acc[d.getDay()].txn++; } });
     return acc;
-  }, {})).sort((a, b) => b.total - a.total).slice(0, 5);
-  const maxTop = topProducts[0]?.total || 1;
+  }, [filtered]);
+
+  // ── Ventas por franja horaria ────────────────────────────────────────────
+  const bySlot = useMemo(() => {
+    const acc = TIME_SLOTS.map(sl => ({ name: sl.label, monto: 0, txn: 0, min: sl.min, max: sl.max }));
+    filtered.forEach(s => {
+      const d = parseDate(s);
+      if (!d) return;
+      const h = d.getHours();
+      const sl = acc.find(a => h >= a.min && h < a.max);
+      if (sl) { sl.monto += s.total||0; sl.txn++; }
+    });
+    return acc;
+  }, [filtered]);
+
+  // ── Tendencia 30 días ────────────────────────────────────────────────────
+  const trend30 = useMemo(() => {
+    const map = {};
+    const now = new Date();
+    for (let i = 29; i >= 0; i--) {
+      const d = new Date(now); d.setDate(d.getDate() - i); d.setHours(0,0,0,0);
+      const key = `${d.getDate()}/${d.getMonth()+1}`;
+      map[key] = { name: key, monto: 0 };
+    }
+    sales.forEach(s => {
+      const d = parseDate(s);
+      if (!d) return;
+      const now2 = new Date(); now2.setHours(23,59,59);
+      const cut = new Date(now2); cut.setDate(cut.getDate()-30);
+      if (d < cut) return;
+      const key = `${d.getDate()}/${d.getMonth()+1}`;
+      if (map[key]) map[key].monto += s.total||0;
+    });
+    return Object.values(map);
+  }, [sales]);
+
+  // ── Mejor día/hora ────────────────────────────────────────────────────────
+  const bestDow  = [...byDow].sort((a,b) => b.monto - a.monto)[0];
+  const bestSlot = [...bySlot].sort((a,b) => b.monto - a.monto)[0];
+  const bestDowFull = FULL_DAY_NAMES[DAY_NAMES.indexOf(bestDow?.name)];
+
+  // ── Métodos de pago ───────────────────────────────────────────────────────
+  const methodsMap = useMemo(() => {
+    const acc = {};
+    filtered.forEach(s => { const k = s.method||"Desconocido"; acc[k] = (acc[k]||0) + (s.total||0); });
+    return acc;
+  }, [filtered]);
+  const methodsArr = Object.entries(methodsMap)
+    .map(([name, value]) => ({ name, value }))
+    .sort((a,b) => b.value - a.value);
+  const totalMethodsMoney = methodsArr.reduce((s, m) => s + m.value, 0);
+  const bestMethod = methodsArr[0];
+
+  // ── Productos ─────────────────────────────────────────────────────────────
+  const productStats = useMemo(() => {
+    const acc = {};
+    filtered.forEach(s => (s.items||[]).forEach(it => {
+      const k = it.id || it.name;
+      if (!acc[k]) acc[k] = { name: it.name, qty: 0, revenue: 0 };
+      acc[k].qty     += it.qty     || 0;
+      acc[k].revenue += (it.price||0) * (it.qty||0);
+    }));
+    return Object.values(acc);
+  }, [filtered]);
+  const top5qty     = [...productStats].sort((a,b) => b.qty     - a.qty    ).slice(0,5);
+  const top5rev     = [...productStats].sort((a,b) => b.revenue - a.revenue).slice(0,5);
+  const starProduct = top5rev[0];
+
+  // Sin movimiento 30 días
+  const thirtyAgo = new Date(); thirtyAgo.setDate(thirtyAgo.getDate()-30); thirtyAgo.setHours(0,0,0,0);
+  const activeIds = new Set(
+    sales.filter(s => { const d = parseDate(s); return d && d >= thirtyAgo; })
+         .flatMap(s => (s.items||[]).map(i => i.id || i.name))
+  );
+  const noMovement = products.filter(p => !activeIds.has(p.id) && !activeIds.has(p.name));
+
+  // ── Inventario ────────────────────────────────────────────────────────────
+  const lowStock   = products.filter(p => p.stock > 0 && p.stock < 5);
+  const outStock   = products.filter(p => p.stock <= 0);
+  const critStock  = products.filter(p => p.stock > 0 && p.stock < (p.minStock ?? 6));
+  const invValue   = products.reduce((s, p) => s + (p.price||0)*(p.stock||0), 0);
+
+  // ── Delta badge ───────────────────────────────────────────────────────────
+  const Delta = ({ curr, prev: p, money }) => {
+    const v = pct(curr, p);
+    if (v === null) return null;
+    const cls = parseFloat(v) > 0 ? "up" : parseFloat(v) < 0 ? "down" : "flat";
+    const arrow = parseFloat(v) > 0 ? "▲" : parseFloat(v) < 0 ? "▼" : "–";
+    return <div className={`ri-kpi-delta ${cls}`}>{arrow} {v}% vs período anterior</div>;
+  };
+
+  const TABS = [
+    { id:"dashboard", label:"📊 Dashboard" },
+    { id:"ventas",    label:"📈 Ventas" },
+    { id:"pagos",     label:"💳 Pagos" },
+    { id:"productos", label:"🏆 Productos" },
+    { id:"stock",     label:"📦 Stock" },
+    { id:"imprimir",  label:"🖨️ Imprimir" },
+  ];
+
+  const RANGES = [
+    { id:"hoy",    label:"Hoy" },
+    { id:"semana", label:"Semana" },
+    { id:"mes",    label:"Mes" },
+    { id:"año",    label:"Año" },
+    { id:"custom", label:"📅" },
+  ];
 
   return (
     <div className="content">
-      <div className="rep-area">
-        <div className="stats-grid">
-          <div className="stat-card"><div className="stat-label">Ventas totales</div><div className="stat-value stat-green">{fmt(totalVentas)}</div></div>
-          <div className="stat-card"><div className="stat-label">Transacciones</div><div className="stat-value stat-blue">{sales.length}</div></div>
-          <div className="stat-card"><div className="stat-label">Artículos</div><div className="stat-value stat-orange">{totalItems.toFixed(1)}</div></div>
-          <div className="stat-card"><div className="stat-label">Ticket prom.</div><div className="stat-value stat-green">{fmt(sales.length ? totalVentas / sales.length : 0)}</div></div>
-          <div className="stat-card"><div className="stat-label">Productos</div><div className="stat-value stat-blue">{products.length}</div></div>
-          <div className="stat-card"><div className="stat-label">Stock bajo</div><div className="stat-value" style={{ color: "#ff6b6b" }}>{products.filter(p => p.stock < (p.minStock ?? 6)).length}</div></div>
-        </div>
-        <div className="rep-section">
-          <h3>💳 Por método de pago</h3>
-          {Object.keys(methods).length === 0 && <div style={{ color: "#6b7280", fontSize: 12 }}>Sin datos</div>}
-          {Object.entries(methods).map(([m, v]) => <div key={m} className="rep-row"><span>{m}</span><span style={{ fontFamily: "monospace", color: "#00c896" }}>{fmt(v)}</span></div>)}
-        </div>
-        <div className="rep-section">
-          <h3>🏆 Top 5 productos</h3>
-          {topProducts.length === 0 && <div style={{ color: "#6b7280", fontSize: 12 }}>Sin datos</div>}
-          {topProducts.map((p, i) => (
-            <div key={p.name} style={{ marginBottom: 8 }}>
-              <div className="rep-row" style={{ borderBottom: "none", paddingBottom: 0 }}>
-                <span style={{ color: i === 0 ? "#fbbf24" : "#e8eaf0" }}>{i + 1}. {p.name}</span>
-                <span style={{ fontFamily: "monospace", color: "#00c896" }}>{fmt(p.total)}</span>
-              </div>
-              <div className="bar"><div className="bar-fill" style={{ width: `${(p.total / maxTop) * 100}%` }} /></div>
-            </div>
+      <div className="ri-wrap">
+        {/* ── Tabs ── */}
+        <div className="ri-tabs">
+          {TABS.map(t => (
+            <button key={t.id} className={`ri-tab${tab===t.id?" active":""}`} onClick={() => setTab(t.id)}>
+              {t.label}
+            </button>
           ))}
         </div>
-        <div className="rep-section">
-          <h3>⚠️ Stock bajo</h3>
-          {products.filter(p => p.stock < (p.minStock ?? 6)).length === 0 && <div style={{ color: "#6b7280", fontSize: 12 }}>Todo bien ✓</div>}
-          {products.filter(p => p.stock < (p.minStock ?? 6)).map(p => <div key={p.id} className="rep-row"><span>{p.name}</span><span style={{ color: "#ff6b6b" }}>{p.stock} {p.unit}</span></div>)}
-        </div>
-        <div className="print-section">
-          <h3>🖨️ IMPRIMIR</h3>
-          <div style={{ marginBottom: 10 }}>
-            <label style={{ fontSize: 11, color: "#9ca3af", display: "block", marginBottom: 4 }}>Nombre del negocio en tickets</label>
-            <input className="product-input" value={bizName} onChange={e => { setBizName(e.target.value); localStorage.setItem("mi-pos-biz-name", e.target.value); }} placeholder="MI POS" style={{ fontSize: 13, marginBottom: 0 }} />
-          </div>
-          <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 5, marginTop: 10, fontWeight: 600 }}>📡 WiFi — OCOM OCPP-80K</div>
-          <PrintBtn label="Ventas del día" onPrint={() => wifiPrinter.print(buildSalesReport(sales, bizName))} printer={wifiPrinter} />
-          <PrintBtn label="Stock bajo" onPrint={() => wifiPrinter.print(buildLowStockReport(products, bizName))} printer={wifiPrinter} />
-          <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4, lineHeight: 1.5 }}>
-            Necesita printer-proxy/proxy.js corriendo en la PC local.
-          </div>
-          <div style={{ fontSize: 11, color: "#9ca3af", margin: "10px 0 5px", fontWeight: 600 }}>🔵 Bluetooth</div>
-          <PrintBtn label="Ventas del día" onPrint={() => btPrinter.print(buildSalesReport(sales, bizName))} printer={btPrinter} />
-          <PrintBtn label="Stock bajo" onPrint={() => btPrinter.print(buildLowStockReport(products, bizName))} printer={btPrinter} />
-          <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4, lineHeight: 1.5 }}>
-            Primera vez: selector Bluetooth para elegir impresora.
-          </div>
-        </div>
-      </div>
+
+        {/* ── Filter bar (hidden for Imprimir) ── */}
+        {tab !== "imprimir" && (
+          <>
+            <div className="ri-filter-bar">
+              {RANGES.map(r => (
+                <button key={r.id} className={`ri-fbtn${r.id==="custom"?" ri-fbtn-custom":""}${range===r.id?" active":""}`}
+                  onClick={() => setRange(r.id)}>{r.label}</button>
+              ))}
+            </div>
+            {range === "custom" && (
+              <div className="ri-custom-dates">
+                <input type="date" value={customFrom} onChange={e => setFrom(e.target.value)} />
+                <span style={{ color:"#6b7280", fontSize:11 }}>→</span>
+                <input type="date" value={customTo}   onChange={e => setTo(e.target.value)} />
+              </div>
+            )}
+          </>
+        )}
+
+        <div className="ri-scroll">
+
+          {/* ════════════════ DASHBOARD ════════════════ */}
+          {tab === "dashboard" && (<>
+            <div className="ri-kpi-grid">
+              <div className="ri-kpi">
+                <div className="ri-kpi-label">Ventas totales</div>
+                <div className="ri-kpi-value" style={{ color:"#00c896", fontSize:15 }}>{fmt(totalRev)}</div>
+                <Delta curr={totalRev} prev={prevRev} money />
+              </div>
+              <div className="ri-kpi">
+                <div className="ri-kpi-label">Transacciones</div>
+                <div className="ri-kpi-value" style={{ color:"#60a5fa" }}>{txCount}</div>
+                <Delta curr={txCount} prev={prevTx} />
+              </div>
+              <div className="ri-kpi">
+                <div className="ri-kpi-label">Ticket promedio</div>
+                <div className="ri-kpi-value" style={{ color:"#fb923c", fontSize:14 }}>{fmt(avgTicket)}</div>
+                <Delta curr={avgTicket} prev={prevAvg} money />
+              </div>
+              <div className="ri-kpi">
+                <div className="ri-kpi-label">Artículos vendidos</div>
+                <div className="ri-kpi-value" style={{ color:"#a78bfa" }}>{totalItems.toFixed(0)}</div>
+              </div>
+            </div>
+
+            {starProduct && (
+              <div className="ri-star-card">
+                <h3>⭐ Producto estrella del período</h3>
+                <div className="ri-star-name">{starProduct.name}</div>
+                <div className="ri-star-val">{fmt(starProduct.revenue)} · {starProduct.qty} unidades</div>
+              </div>
+            )}
+
+            <div className="ri-card">
+              <h3>📈 Tendencia — últimos 30 días</h3>
+              <div className="ri-chart-wrap">
+                <ResponsiveContainer width="100%" height={140}>
+                  <LineChart data={trend30} margin={{ top:4, right:4, left:-28, bottom:0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#2a3045" />
+                    <XAxis dataKey="name" tick={{ fill:"#6b7280", fontSize:9 }} interval={6} />
+                    <YAxis tick={{ fill:"#6b7280", fontSize:9 }} tickFormatter={v => `$${(v/1000).toFixed(0)}k`} />
+                    <Tooltip content={<RiTooltip money />} />
+                    <Line type="monotone" dataKey="monto" stroke="#00c896" strokeWidth={2} dot={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            <div className="ri-card">
+              <h3>💳 Métodos de pago</h3>
+              {methodsArr.length === 0
+                ? <div className="ri-empty">Sin ventas en el período</div>
+                : methodsArr.map((m, i) => (
+                  <div key={m.name} className="ri-methods-row">
+                    <div className="ri-methods-dot" style={{ background: CHART_COLORS[i % CHART_COLORS.length] }} />
+                    <div className="ri-methods-name">{m.name}</div>
+                    <div className="ri-methods-pct">{totalMethodsMoney > 0 ? ((m.value/totalMethodsMoney)*100).toFixed(0) : 0}%</div>
+                    <div className="ri-methods-val">{fmt(m.value)}</div>
+                  </div>
+                ))
+              }
+            </div>
+
+            <div className="ri-card">
+              <h3>⚠️ Stock bajo (&lt; 5 unidades)</h3>
+              {lowStock.length === 0
+                ? <div className="ri-empty">✓ Todo el stock está bien</div>
+                : lowStock.slice(0,5).map(p => (
+                  <div key={p.id} className="ri-item">
+                    <div className="ri-item-name">{p.name}</div>
+                    <span className="ri-badge danger">{p.stock} {p.unit||"uds"}</span>
+                  </div>
+                ))
+              }
+            </div>
+          </>)}
+
+          {/* ════════════════ VENTAS ════════════════ */}
+          {tab === "ventas" && (<>
+            <div className="ri-kpi-grid">
+              <div className="ri-kpi">
+                <div className="ri-kpi-label">Total período</div>
+                <div className="ri-kpi-value" style={{ color:"#00c896", fontSize:14 }}>{fmt(totalRev)}</div>
+                <Delta curr={totalRev} prev={prevRev} money />
+              </div>
+              <div className="ri-kpi">
+                <div className="ri-kpi-label">Transacciones</div>
+                <div className="ri-kpi-value" style={{ color:"#60a5fa" }}>{txCount}</div>
+              </div>
+            </div>
+
+            <div className="ri-card">
+              <h3>📅 Ventas por día de la semana</h3>
+              <div className="ri-chart-wrap">
+                <ResponsiveContainer width="100%" height={160}>
+                  <BarChart data={byDow} margin={{ top:4, right:4, left:-28, bottom:0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#2a3045" />
+                    <XAxis dataKey="name" tick={{ fill:"#9ca3af", fontSize:10 }} />
+                    <YAxis tick={{ fill:"#6b7280", fontSize:9 }} tickFormatter={v => `$${(v/1000).toFixed(0)}k`} />
+                    <Tooltip content={<RiTooltip money />} />
+                    <Bar dataKey="monto" fill="#00c896" radius={[4,4,0,0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              {bestDow?.monto > 0 && (
+                <div style={{ marginTop:8 }}>
+                  <span className="ri-badge">🏆 Mejor día: {bestDowFull} — {fmt(bestDow.monto)}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="ri-card">
+              <h3>🕐 Ventas por franja horaria</h3>
+              <div className="ri-chart-wrap">
+                <ResponsiveContainer width="100%" height={160}>
+                  <BarChart data={bySlot} margin={{ top:4, right:4, left:-28, bottom:0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#2a3045" />
+                    <XAxis dataKey="name" tick={{ fill:"#9ca3af", fontSize:9 }} />
+                    <YAxis tick={{ fill:"#6b7280", fontSize:9 }} tickFormatter={v => `$${(v/1000).toFixed(0)}k`} />
+                    <Tooltip content={<RiTooltip money />} />
+                    <Bar dataKey="monto" fill="#60a5fa" radius={[4,4,0,0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              {bestSlot?.monto > 0 && (
+                <div style={{ marginTop:8 }}>
+                  <span className="ri-badge">⏰ Mejor franja: {bestSlot.name.split("\n")[0]} — {fmt(bestSlot.monto)}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="ri-card">
+              <h3>📈 Tendencia — últimos 30 días</h3>
+              <div className="ri-chart-wrap">
+                <ResponsiveContainer width="100%" height={160}>
+                  <LineChart data={trend30} margin={{ top:4, right:4, left:-28, bottom:0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#2a3045" />
+                    <XAxis dataKey="name" tick={{ fill:"#6b7280", fontSize:9 }} interval={6} />
+                    <YAxis tick={{ fill:"#6b7280", fontSize:9 }} tickFormatter={v => `$${(v/1000).toFixed(0)}k`} />
+                    <Tooltip content={<RiTooltip money />} />
+                    <Line type="monotone" dataKey="monto" stroke="#00c896" strokeWidth={2} dot={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          </>)}
+
+          {/* ════════════════ PAGOS ════════════════ */}
+          {tab === "pagos" && (<>
+            {methodsArr.length === 0
+              ? <div className="ri-card"><div className="ri-empty">Sin ventas en el período seleccionado</div></div>
+              : (<>
+                <div className="ri-card">
+                  <h3>🥧 Distribución por método</h3>
+                  <ResponsiveContainer width="100%" height={200}>
+                    <PieChart>
+                      <Pie data={methodsArr} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={75}
+                        label={({ name, percent }) => `${name} ${(percent*100).toFixed(0)}%`}
+                        labelLine={{ stroke:"#3a4158" }}
+                      >
+                        {methodsArr.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
+                      </Pie>
+                      <Tooltip formatter={v => fmt(v)} contentStyle={{ background:"#1e2438", border:"1px solid #3a4158", borderRadius:8, fontSize:11 }} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+
+                <div className="ri-card">
+                  <h3>💰 Monto por método</h3>
+                  {methodsArr.map((m, i) => (
+                    <div key={m.name} className="ri-item">
+                      <div className="ri-methods-dot" style={{ background: CHART_COLORS[i % CHART_COLORS.length], width:12, height:12, borderRadius:"50%", flexShrink:0 }} />
+                      <div className="ri-item-name">{m.name}</div>
+                      <div style={{ fontSize:10, color:"#6b7280", marginRight:6 }}>
+                        {totalMethodsMoney > 0 ? ((m.value/totalMethodsMoney)*100).toFixed(1) : 0}%
+                      </div>
+                      <div className="ri-item-val">{fmt(m.value)}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {bestMethod && (
+                  <div className="ri-star-card">
+                    <h3>⭐ Método más usado del período</h3>
+                    <div className="ri-star-name">{bestMethod.name}</div>
+                    <div className="ri-star-val">{fmt(bestMethod.value)} · {totalMethodsMoney > 0 ? ((bestMethod.value/totalMethodsMoney)*100).toFixed(1) : 0}% del total</div>
+                  </div>
+                )}
+              </>)
+            }
+          </>)}
+
+          {/* ════════════════ PRODUCTOS ════════════════ */}
+          {tab === "productos" && (<>
+            <div className="ri-card">
+              <h3>🏆 Top 5 por cantidad vendida</h3>
+              {top5qty.length === 0
+                ? <div className="ri-empty">Sin ventas en el período</div>
+                : top5qty.map((p, i) => {
+                  const max = top5qty[0].qty || 1;
+                  return (
+                    <div key={p.name} className="ri-item" style={{ flexDirection:"column", alignItems:"flex-start", gap:4 }}>
+                      <div style={{ display:"flex", width:"100%", alignItems:"center", gap:8 }}>
+                        <div className="ri-item-rank" style={{ color: i===0?"#fbbf24": i===1?"#9ca3af": i===2?"#fb923c":"#6b7280" }}>
+                          {i===0?"🥇":i===1?"🥈":i===2?"🥉":`${i+1}.`}
+                        </div>
+                        <div className="ri-item-name">{p.name}</div>
+                        <div className="ri-item-val">{p.qty} uds</div>
+                      </div>
+                      <div style={{ width:"100%", paddingLeft:28 }}>
+                        <div className="ri-item-bar"><div className="ri-item-bar-fill" style={{ width:`${(p.qty/max)*100}%` }} /></div>
+                      </div>
+                    </div>
+                  );
+                })
+              }
+            </div>
+
+            <div className="ri-card">
+              <h3>💵 Top 5 por monto generado</h3>
+              {top5rev.length === 0
+                ? <div className="ri-empty">Sin ventas en el período</div>
+                : top5rev.map((p, i) => {
+                  const max = top5rev[0].revenue || 1;
+                  return (
+                    <div key={p.name} className="ri-item" style={{ flexDirection:"column", alignItems:"flex-start", gap:4 }}>
+                      <div style={{ display:"flex", width:"100%", alignItems:"center", gap:8 }}>
+                        <div className="ri-item-rank" style={{ color: i===0?"#fbbf24": i===1?"#9ca3af": i===2?"#fb923c":"#6b7280" }}>
+                          {i===0?"🥇":i===1?"🥈":i===2?"🥉":`${i+1}.`}
+                        </div>
+                        <div className="ri-item-name">{p.name}</div>
+                        <div className="ri-item-val" style={{ fontSize:11 }}>{fmt(p.revenue)}</div>
+                      </div>
+                      <div style={{ width:"100%", paddingLeft:28 }}>
+                        <div className="ri-item-bar"><div className="ri-item-bar-fill" style={{ width:`${(p.revenue/max)*100}%`, background:"linear-gradient(90deg,#60a5fa,#3b82f6)" }} /></div>
+                      </div>
+                    </div>
+                  );
+                })
+              }
+            </div>
+
+            {starProduct && (
+              <div className="ri-star-card">
+                <h3>⭐ Producto estrella del período</h3>
+                <div className="ri-star-name">{starProduct.name}</div>
+                <div className="ri-star-val">{fmt(starProduct.revenue)} · {starProduct.qty} unidades</div>
+              </div>
+            )}
+
+            <div className="ri-card">
+              <h3>😴 Sin movimiento — últimos 30 días</h3>
+              {noMovement.length === 0
+                ? <div className="ri-empty">✓ Todos los productos tuvieron actividad</div>
+                : noMovement.map(p => (
+                  <div key={p.id} className="ri-item">
+                    <div className="ri-item-name">{p.name}</div>
+                    <span className="ri-badge warn">Stock: {p.stock}</span>
+                  </div>
+                ))
+              }
+            </div>
+          </>)}
+
+          {/* ════════════════ STOCK ════════════════ */}
+          {tab === "stock" && (<>
+            <div className="ri-kpi-grid">
+              <div className="ri-kpi">
+                <div className="ri-kpi-label">Valor inventario</div>
+                <div className="ri-kpi-value" style={{ color:"#00c896", fontSize:13 }}>{fmt(invValue)}</div>
+              </div>
+              <div className="ri-kpi">
+                <div className="ri-kpi-label">Total productos</div>
+                <div className="ri-kpi-value" style={{ color:"#60a5fa" }}>{products.length}</div>
+              </div>
+              <div className="ri-kpi">
+                <div className="ri-kpi-label">Stock bajo</div>
+                <div className="ri-kpi-value" style={{ color: lowStock.length > 0 ? "#fb923c":"#6b7280" }}>{lowStock.length}</div>
+              </div>
+              <div className="ri-kpi">
+                <div className="ri-kpi-label">Sin stock</div>
+                <div className="ri-kpi-value" style={{ color: outStock.length > 0 ? "#ff6b6b":"#6b7280" }}>{outStock.length}</div>
+              </div>
+            </div>
+
+            <div className="ri-card">
+              <h3>🔴 Sin stock</h3>
+              {outStock.length === 0
+                ? <div className="ri-empty">✓ No hay productos sin stock</div>
+                : outStock.map(p => (
+                  <div key={p.id} className="ri-item">
+                    <div className="ri-item-name">{p.name}</div>
+                    <span className="ri-badge danger">Sin stock</span>
+                  </div>
+                ))
+              }
+            </div>
+
+            <div className="ri-card">
+              <h3>⚠️ Stock bajo (&lt; 5 unidades)</h3>
+              {lowStock.length === 0
+                ? <div className="ri-empty">✓ Todo bien</div>
+                : lowStock.sort((a,b) => a.stock - b.stock).map(p => (
+                  <div key={p.id} className="ri-item">
+                    <div style={{ flex:1 }}>
+                      <div className="ri-item-name">{p.name}</div>
+                      <div className="ri-item-sub">{p.category||""}</div>
+                    </div>
+                    <span className="ri-badge danger">{p.stock} {p.unit||"uds"}</span>
+                  </div>
+                ))
+              }
+            </div>
+
+            <div className="ri-card">
+              <h3>🟡 Próximos a agotarse (bajo mínimo)</h3>
+              {critStock.filter(p => p.stock >= 5).length === 0
+                ? <div className="ri-empty">✓ Sin alertas</div>
+                : critStock.filter(p => p.stock >= 5).sort((a,b) => a.stock - b.stock).map(p => (
+                  <div key={p.id} className="ri-item">
+                    <div style={{ flex:1 }}>
+                      <div className="ri-item-name">{p.name}</div>
+                      <div className="ri-item-sub">Mínimo: {p.minStock ?? 6}</div>
+                    </div>
+                    <span className="ri-badge warn">{p.stock} {p.unit||"uds"}</span>
+                  </div>
+                ))
+              }
+            </div>
+
+            <div className="ri-card">
+              <h3>📦 Todo el inventario</h3>
+              {products.length === 0
+                ? <div className="ri-empty">Sin productos</div>
+                : [...products].sort((a,b) => a.stock - b.stock).map(p => (
+                  <div key={p.id} className="ri-item">
+                    <div style={{ flex:1 }}>
+                      <div className="ri-item-name">{p.name}</div>
+                      <div className="ri-item-sub">{p.category||""} · {fmt(p.price)}</div>
+                    </div>
+                    <span className={`ri-badge${p.stock<=0?" danger":p.stock<5?" warn":""}`}>
+                      {p.stock} {p.unit||"uds"}
+                    </span>
+                  </div>
+                ))
+              }
+            </div>
+          </>)}
+
+          {/* ════════════════ IMPRIMIR ════════════════ */}
+          {tab === "imprimir" && (
+            <div className="print-section" style={{ marginBottom:0 }}>
+              <h3>🖨️ IMPRIMIR</h3>
+              <div style={{ marginBottom: 10 }}>
+                <label style={{ fontSize: 11, color: "#9ca3af", display: "block", marginBottom: 4 }}>Nombre del negocio en tickets</label>
+                <input className="product-input" value={bizName} onChange={e => { setBizName(e.target.value); localStorage.setItem("mi-pos-biz-name", e.target.value); }} placeholder="MI POS" style={{ fontSize: 13, marginBottom: 0 }} />
+              </div>
+              <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 5, marginTop: 10, fontWeight: 600 }}>📡 WiFi — OCOM OCPP-80K</div>
+              <PrintBtn label="Ventas del día" onPrint={() => wifiPrinter.print(buildSalesReport(sales, bizName))} printer={wifiPrinter} />
+              <PrintBtn label="Stock bajo" onPrint={() => wifiPrinter.print(buildLowStockReport(products, bizName))} printer={wifiPrinter} />
+              <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4, lineHeight: 1.5 }}>Necesita printer-proxy/proxy.js corriendo en la PC local.</div>
+              <div style={{ fontSize: 11, color: "#9ca3af", margin: "10px 0 5px", fontWeight: 600 }}>🔵 Bluetooth</div>
+              <PrintBtn label="Ventas del día" onPrint={() => btPrinter.print(buildSalesReport(sales, bizName))} printer={btPrinter} />
+              <PrintBtn label="Stock bajo" onPrint={() => btPrinter.print(buildLowStockReport(products, bizName))} printer={btPrinter} />
+              <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4, lineHeight: 1.5 }}>Primera vez: selector Bluetooth para elegir impresora.</div>
+            </div>
+          )}
+
+        </div>{/* ri-scroll */}
+      </div>{/* ri-wrap */}
     </div>
   );
 }
