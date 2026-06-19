@@ -2660,10 +2660,17 @@ function ReportsView({ sales, products, btPrinter, wifiPrinter, bizName, setBizN
 
 // ─── PermissionsView ──────────────────────────────────────────────────────────
 function MigrationSection() {
-  const [status, setStatus] = useState("idle"); // idle | checking | running | done | error
-  const [counts, setCounts] = useState(null);   // { products, sales, hasCategories }
+  // ── Sección 1: migrar raíz → local1 ──────────────────────────────────────
+  const [status, setStatus] = useState("idle"); // idle | checking | running | done | error | empty
+  const [counts, setCounts] = useState(null);
   const [progress, setProgress] = useState("");
   const [error, setError] = useState("");
+
+  // ── Sección 2: copiar catálogo local1 → godoy-cruz ───────────────────────
+  const [gcStatus, setGcStatus]     = useState("idle"); // idle | checking | running | done | error | empty
+  const [gcCount, setGcCount]       = useState(null);
+  const [gcProgress, setGcProgress] = useState("");
+  const [gcError, setGcError]       = useState("");
 
   const check = async () => {
     setStatus("checking");
@@ -2675,106 +2682,127 @@ function MigrationSection() {
       ]);
       setCounts({ products: pSnap.size, sales: sSnap.size, hasCategories: cSnap.exists() });
       setStatus(pSnap.size === 0 && sSnap.size === 0 ? "empty" : "ready");
-    } catch (e) {
-      setError(e.message);
-      setStatus("error");
-    }
+    } catch (e) { setError(e.message); setStatus("error"); }
   };
 
   const migrate = async () => {
-    setStatus("running");
-    setError("");
+    setStatus("running"); setError("");
     try {
       setProgress("Leyendo productos…");
       const pSnap = await getDocs(collection(db, "products"));
       let done = 0;
       for (const d of pSnap.docs) {
         await setDoc(doc(db, "locals", "local1", "products", d.id), d.data());
-        done++;
-        setProgress(`Productos: ${done}/${pSnap.size}`);
+        setProgress(`Productos: ${++done}/${pSnap.size}`);
       }
-
       setProgress("Leyendo ventas…");
       const sSnap = await getDocs(collection(db, "sales"));
       done = 0;
       for (const d of sSnap.docs) {
         await setDoc(doc(db, "locals", "local1", "sales", d.id), d.data());
-        done++;
-        setProgress(`Ventas: ${done}/${sSnap.size}`);
+        setProgress(`Ventas: ${++done}/${sSnap.size}`);
       }
-
       setProgress("Copiando categorías…");
       const cSnap = await getDoc(doc(db, "settings", "categories"));
-      if (cSnap.exists()) {
-        await setDoc(doc(db, "locals", "local1", "settings", "categories"), cSnap.data());
-      }
-
+      if (cSnap.exists()) await setDoc(doc(db, "locals", "local1", "settings", "categories"), cSnap.data());
       setProgress(`✅ Listo: ${pSnap.size} productos y ${sSnap.size} ventas migradas a Local 1`);
       setStatus("done");
-    } catch (e) {
-      setError(e.message);
-      setStatus("error");
-    }
+    } catch (e) { setError(e.message); setStatus("error"); }
   };
 
+  const checkGodoy = async () => {
+    setGcStatus("checking");
+    try {
+      const snap = await getDocs(collection(db, "locals", "local1", "products"));
+      setGcCount(snap.size);
+      setGcStatus(snap.size === 0 ? "empty" : "ready");
+    } catch (e) { setGcError(e.message); setGcStatus("error"); }
+  };
+
+  const copyToGodoy = async () => {
+    setGcStatus("running"); setGcError("");
+    try {
+      const snap = await getDocs(collection(db, "locals", "local1", "products"));
+      let done = 0;
+      for (const d of snap.docs) {
+        const src = d.data();
+        await setDoc(doc(db, "locals", "local-godoy-cruz", "products", d.id), {
+          name:     src.name     || "",
+          barcode:  src.barcode  || null,
+          img:      src.img      || null,
+          category: src.category || "General",
+          type:     src.type     || "unit",
+          unit:     src.unit     || "u",
+          price:    0,
+          stock:    0,
+          minStock: 5,
+          cost:     0,
+        });
+        setGcProgress(`Copiando: ${++done}/${snap.size}`);
+      }
+      setGcProgress(`✅ ${snap.size} productos copiados a Godoy Cruz (sin precio ni stock)`);
+      setGcStatus("done");
+    } catch (e) { setGcError(e.message); setGcStatus("error"); }
+  };
+
+  const card = (border) => ({ background: "#1e2438", border: `1px solid ${border}`, borderRadius: 10, padding: 16, marginBottom: 14 });
+  const info = { background: "#252b3b", borderRadius: 8, padding: 10, fontSize: 13, marginBottom: 10 };
+  const running = { background: "#252b3b", borderRadius: 8, padding: 10, fontSize: 13, color: "#00c896", textAlign: "center" };
+  const done = { background: "#0d2b1e", border: "1px solid #00c896", borderRadius: 8, padding: 10, fontSize: 13, color: "#00c896" };
+  const err = { background: "#3b0d0d", border: "1px solid #ff6b6b", borderRadius: 8, padding: 10, fontSize: 13, color: "#ff6b6b" };
+
   return (
-    <div style={{ background: "#1e2438", border: "1px solid #00c89644", borderRadius: 10, padding: 16, marginBottom: 18 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-        <span style={{ fontSize: 20 }}>🔄</span>
-        <div>
-          <div style={{ fontWeight: 700, fontSize: 14, color: "#e8eaf0" }}>Migración de datos al formato multi-local</div>
-          <div style={{ fontSize: 11, color: "#9ca3af" }}>Copia los datos existentes (productos, ventas, categorías) de la ruta raíz hacia <code style={{ background: "#252b3b", padding: "1px 4px", borderRadius: 3 }}>locals/local1/</code></div>
+    <>
+      {/* ── Tarjeta 1: migración raíz → local1 ── */}
+      <div style={card("#00c89644")}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+          <span style={{ fontSize: 20 }}>🔄</span>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 14, color: "#e8eaf0" }}>Migración de datos al formato multi-local</div>
+            <div style={{ fontSize: 11, color: "#9ca3af" }}>Copia productos, ventas y categorías de la ruta raíz hacia <code style={{ background: "#252b3b", padding: "1px 4px", borderRadius: 3 }}>locals/local1/</code></div>
+          </div>
         </div>
+        {status === "idle"     && <button onClick={check} className="btn-primary" style={{ width: "100%" }}>Verificar datos a migrar</button>}
+        {status === "checking" && <div style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "8px 0" }}>⏳ Verificando…</div>}
+        {status === "empty"    && <div style={{ ...info, textAlign: "center", color: "#9ca3af" }}>✓ No hay datos en la ruta raíz para migrar.</div>}
+        {status === "ready" && counts && (
+          <>
+            <div style={info}>
+              <div>📦 <strong>{counts.products}</strong> productos · 🧾 <strong>{counts.sales}</strong> ventas · 🏷️ Categorías: <strong>{counts.hasCategories ? "sí" : "no"}</strong></div>
+            </div>
+            <button onClick={migrate} className="btn-primary" style={{ width: "100%", background: "#00a87a" }}>▶ Migrar todo a Local 1</button>
+            <div style={{ fontSize: 11, color: "#6b7280", marginTop: 6, textAlign: "center" }}>Los datos originales no serán borrados.</div>
+          </>
+        )}
+        {status === "running"  && <div style={running}>⏳ {progress}</div>}
+        {status === "done"     && <div style={done}>{progress}</div>}
+        {status === "error"    && <div style={err}>❌ {error}</div>}
       </div>
 
-      {status === "idle" && (
-        <button onClick={check} className="btn-primary" style={{ width: "100%", marginTop: 4 }}>
-          Verificar datos a migrar
-        </button>
-      )}
-
-      {status === "checking" && (
-        <div style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "8px 0" }}>⏳ Verificando…</div>
-      )}
-
-      {status === "empty" && (
-        <div style={{ background: "#252b3b", borderRadius: 8, padding: 10, fontSize: 13, color: "#9ca3af", textAlign: "center" }}>
-          ✓ No hay datos en la ruta raíz para migrar (la colección ya está vacía).
-        </div>
-      )}
-
-      {status === "ready" && counts && (
-        <>
-          <div style={{ background: "#252b3b", borderRadius: 8, padding: 10, fontSize: 13, marginBottom: 10 }}>
-            <div>📦 <strong>{counts.products}</strong> productos encontrados</div>
-            <div>🧾 <strong>{counts.sales}</strong> ventas encontradas</div>
-            <div>🏷️ Categorías: <strong>{counts.hasCategories ? "sí" : "no"}</strong></div>
+      {/* ── Tarjeta 2: copiar catálogo local1 → godoy-cruz ── */}
+      <div style={card("#60a5fa44")}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+          <span style={{ fontSize: 20 }}>📋</span>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 14, color: "#e8eaf0" }}>Copiar catálogo a Godoy Cruz</div>
+            <div style={{ fontSize: 11, color: "#9ca3af" }}>Copia productos de Local 1 a Godoy Cruz con <strong style={{ color: "#c9cdd6" }}>foto, código y descripción</strong> únicamente — precio, stock y costo quedan en cero para completar localmente.</div>
           </div>
-          <button onClick={migrate} className="btn-primary" style={{ width: "100%", background: "#00a87a" }}>
-            ▶ Migrar todo a Local 1
-          </button>
-          <div style={{ fontSize: 11, color: "#6b7280", marginTop: 6, textAlign: "center" }}>Los datos originales no serán borrados.</div>
-        </>
-      )}
-
-      {status === "running" && (
-        <div style={{ background: "#252b3b", borderRadius: 8, padding: 10, fontSize: 13, color: "#00c896", textAlign: "center" }}>
-          ⏳ {progress}
         </div>
-      )}
-
-      {status === "done" && (
-        <div style={{ background: "#0d2b1e", border: "1px solid #00c896", borderRadius: 8, padding: 10, fontSize: 13, color: "#00c896" }}>
-          {progress}
-        </div>
-      )}
-
-      {status === "error" && (
-        <div style={{ background: "#3b0d0d", border: "1px solid #ff6b6b", borderRadius: 8, padding: 10, fontSize: 13, color: "#ff6b6b" }}>
-          ❌ Error: {error}
-        </div>
-      )}
-    </div>
+        {gcStatus === "idle"     && <button onClick={checkGodoy} className="btn-primary" style={{ width: "100%", background: "#2563eb" }}>Verificar productos en Local 1</button>}
+        {gcStatus === "checking" && <div style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "8px 0" }}>⏳ Verificando…</div>}
+        {gcStatus === "empty"    && <div style={{ ...info, textAlign: "center", color: "#9ca3af" }}>⚠️ Local 1 no tiene productos todavía. Migrá primero desde la tarjeta de arriba.</div>}
+        {gcStatus === "ready"    && (
+          <>
+            <div style={info}>📦 <strong>{gcCount}</strong> productos en Local 1 para copiar</div>
+            <button onClick={copyToGodoy} className="btn-primary" style={{ width: "100%", background: "#2563eb" }}>▶ Copiar catálogo a Godoy Cruz</button>
+            <div style={{ fontSize: 11, color: "#6b7280", marginTop: 6, textAlign: "center" }}>Los productos de Local 1 no se modifican. Si ya existe un producto en Godoy Cruz, se sobreescribe.</div>
+          </>
+        )}
+        {gcStatus === "running"  && <div style={running}>⏳ {gcProgress}</div>}
+        {gcStatus === "done"     && <div style={done}>{gcProgress}</div>}
+        {gcStatus === "error"    && <div style={err}>❌ {gcError}</div>}
+      </div>
+    </>
   );
 }
 
