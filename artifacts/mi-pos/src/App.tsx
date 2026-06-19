@@ -7,7 +7,7 @@ import {
 import { db, auth, storage } from "./firebase";
 import {
   collection, doc, onSnapshot, setDoc, deleteDoc, addDoc,
-  serverTimestamp, query, orderBy, updateDoc
+  serverTimestamp, query, orderBy, updateDoc, getDocs, getDoc
 } from "firebase/firestore";
 import {
   createUserWithEmailAndPassword, signInWithEmailAndPassword,
@@ -2659,6 +2659,125 @@ function ReportsView({ sales, products, btPrinter, wifiPrinter, bizName, setBizN
 }
 
 // ─── PermissionsView ──────────────────────────────────────────────────────────
+function MigrationSection() {
+  const [status, setStatus] = useState("idle"); // idle | checking | running | done | error
+  const [counts, setCounts] = useState(null);   // { products, sales, hasCategories }
+  const [progress, setProgress] = useState("");
+  const [error, setError] = useState("");
+
+  const check = async () => {
+    setStatus("checking");
+    try {
+      const [pSnap, sSnap, cSnap] = await Promise.all([
+        getDocs(collection(db, "products")),
+        getDocs(collection(db, "sales")),
+        getDoc(doc(db, "settings", "categories")),
+      ]);
+      setCounts({ products: pSnap.size, sales: sSnap.size, hasCategories: cSnap.exists() });
+      setStatus(pSnap.size === 0 && sSnap.size === 0 ? "empty" : "ready");
+    } catch (e) {
+      setError(e.message);
+      setStatus("error");
+    }
+  };
+
+  const migrate = async () => {
+    setStatus("running");
+    setError("");
+    try {
+      setProgress("Leyendo productos…");
+      const pSnap = await getDocs(collection(db, "products"));
+      let done = 0;
+      for (const d of pSnap.docs) {
+        await setDoc(doc(db, "locals", "local1", "products", d.id), d.data());
+        done++;
+        setProgress(`Productos: ${done}/${pSnap.size}`);
+      }
+
+      setProgress("Leyendo ventas…");
+      const sSnap = await getDocs(collection(db, "sales"));
+      done = 0;
+      for (const d of sSnap.docs) {
+        await setDoc(doc(db, "locals", "local1", "sales", d.id), d.data());
+        done++;
+        setProgress(`Ventas: ${done}/${sSnap.size}`);
+      }
+
+      setProgress("Copiando categorías…");
+      const cSnap = await getDoc(doc(db, "settings", "categories"));
+      if (cSnap.exists()) {
+        await setDoc(doc(db, "locals", "local1", "settings", "categories"), cSnap.data());
+      }
+
+      setProgress(`✅ Listo: ${pSnap.size} productos y ${sSnap.size} ventas migradas a Local 1`);
+      setStatus("done");
+    } catch (e) {
+      setError(e.message);
+      setStatus("error");
+    }
+  };
+
+  return (
+    <div style={{ background: "#1e2438", border: "1px solid #00c89644", borderRadius: 10, padding: 16, marginBottom: 18 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+        <span style={{ fontSize: 20 }}>🔄</span>
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 14, color: "#e8eaf0" }}>Migración de datos al formato multi-local</div>
+          <div style={{ fontSize: 11, color: "#9ca3af" }}>Copia los datos existentes (productos, ventas, categorías) de la ruta raíz hacia <code style={{ background: "#252b3b", padding: "1px 4px", borderRadius: 3 }}>locals/local1/</code></div>
+        </div>
+      </div>
+
+      {status === "idle" && (
+        <button onClick={check} className="btn-primary" style={{ width: "100%", marginTop: 4 }}>
+          Verificar datos a migrar
+        </button>
+      )}
+
+      {status === "checking" && (
+        <div style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "8px 0" }}>⏳ Verificando…</div>
+      )}
+
+      {status === "empty" && (
+        <div style={{ background: "#252b3b", borderRadius: 8, padding: 10, fontSize: 13, color: "#9ca3af", textAlign: "center" }}>
+          ✓ No hay datos en la ruta raíz para migrar (la colección ya está vacía).
+        </div>
+      )}
+
+      {status === "ready" && counts && (
+        <>
+          <div style={{ background: "#252b3b", borderRadius: 8, padding: 10, fontSize: 13, marginBottom: 10 }}>
+            <div>📦 <strong>{counts.products}</strong> productos encontrados</div>
+            <div>🧾 <strong>{counts.sales}</strong> ventas encontradas</div>
+            <div>🏷️ Categorías: <strong>{counts.hasCategories ? "sí" : "no"}</strong></div>
+          </div>
+          <button onClick={migrate} className="btn-primary" style={{ width: "100%", background: "#00a87a" }}>
+            ▶ Migrar todo a Local 1
+          </button>
+          <div style={{ fontSize: 11, color: "#6b7280", marginTop: 6, textAlign: "center" }}>Los datos originales no serán borrados.</div>
+        </>
+      )}
+
+      {status === "running" && (
+        <div style={{ background: "#252b3b", borderRadius: 8, padding: 10, fontSize: 13, color: "#00c896", textAlign: "center" }}>
+          ⏳ {progress}
+        </div>
+      )}
+
+      {status === "done" && (
+        <div style={{ background: "#0d2b1e", border: "1px solid #00c896", borderRadius: 8, padding: 10, fontSize: 13, color: "#00c896" }}>
+          {progress}
+        </div>
+      )}
+
+      {status === "error" && (
+        <div style={{ background: "#3b0d0d", border: "1px solid #ff6b6b", borderRadius: 8, padding: 10, fontSize: 13, color: "#ff6b6b" }}>
+          ❌ Error: {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PermissionsView() {
   const [users, setUsers] = useState([]);
   useEffect(() => {
@@ -2686,6 +2805,7 @@ function PermissionsView() {
   return (
     <div className="content">
       <div className="perm-area">
+        <MigrationSection />
         <div style={{ fontSize: 12, color: "#9ca3af", marginBottom: 12 }}>Controlá los permisos de cada colaborador</div>
         {users.filter(u => u.role !== "owner").map(u => (
           <div key={u.id} className="perm-card">
