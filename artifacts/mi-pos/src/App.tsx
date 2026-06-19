@@ -1137,12 +1137,28 @@ function useBTPrinter(){
 
 // ─── WiFi printer hook ────────────────────────────────────────────────────────
 const WIFI_PROXY_URL = "ws://localhost:9200";
+
+/** Convierte Uint8Array a base64 para el bridge Android */
+function toBase64(bytes: Uint8Array): string {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+
+/** Devuelve true si la app corre dentro de la APK nativa con bridge Android */
+function hasAndroidBridge(): boolean {
+  return typeof (window as any).AndroidPrinter !== "undefined" &&
+    typeof (window as any).AndroidPrinter.imprimir === "function";
+}
+
 function useWifiPrinter() {
   const [status, setStatus] = useState("idle");
   const [errMsg,  setErrMsg]  = useState("");
   const wsRef = useRef(null);
 
   const connect = () => new Promise((resolve) => {
+    // Si hay bridge nativo no necesitamos WebSocket
+    if (hasAndroidBridge()) { resolve(true); return; }
     if (wsRef.current?.readyState === WebSocket.OPEN) { resolve(true); return; }
     setStatus("connecting"); setErrMsg("");
     const ws = new WebSocket(WIFI_PROXY_URL);
@@ -1165,12 +1181,27 @@ function useWifiPrinter() {
   });
 
   const disconnect = () => {
+    if (hasAndroidBridge()) return; // bridge nativo no tiene conexión que cerrar
     wsRef.current?.close();
     wsRef.current = null;
     setStatus("idle"); setErrMsg("");
   };
 
-  const print = async (bytes) => {
+  const print = async (bytes: Uint8Array) => {
+    // ── Camino 1: bridge nativo de la APK ──────────────────────────────────
+    if (hasAndroidBridge()) {
+      setStatus("printing");
+      try {
+        (window as any).AndroidPrinter.imprimir(toBase64(bytes));
+        await new Promise(r => setTimeout(r, 400));
+        setStatus("connected");
+      } catch (err: any) {
+        setStatus("error");
+        setErrMsg(err.message || String(err));
+      }
+      return;
+    }
+    // ── Camino 2: proxy WebSocket en la PC (fallback) ──────────────────────
     const ok = await connect();
     if (!ok) return;
     setStatus("printing");
@@ -1178,13 +1209,14 @@ function useWifiPrinter() {
       wsRef.current.send(bytes);
       await new Promise(r => setTimeout(r, 800));
       setStatus("connected");
-    } catch (err) {
+    } catch (err: any) {
       setStatus("error");
       setErrMsg(err.message || String(err));
     }
   };
 
-  return { status, errMsg, devName: "WiFi OCOM", connect, disconnect, print };
+  const devName = hasAndroidBridge() ? "Impresora (APK)" : "WiFi OCOM";
+  return { status, errMsg, devName, connect, disconnect, print };
 }
 
 // ─── PrintBtn ──────────────────────────────────────────────────────────────────
