@@ -1173,7 +1173,7 @@ function useWifiPrinter() {
       }
       return;
     }
-    // ── Camino 2: servidor HTTP local en el celular (localhost:9200) ────────
+    // ── Camino 2: servidor HTTP local en Termux (10.0.0.106:3000) ─────────
     setStatus("printing");
     try {
       const res = await fetch(WIFI_HTTP_URL, {
