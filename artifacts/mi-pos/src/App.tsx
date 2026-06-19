@@ -1366,12 +1366,6 @@ function AIChat({ products, sales, bizName, userProfile, onClose }) {
 
 // ─── SuccessModal ──────────────────────────────────────────────────────────────
 function SuccessModal({ sale, onClose, btPrinter, wifiPrinter, bizName }) {
-  useEffect(() => {
-    // Auto-print via WiFi as soon as the modal appears
-    wifiPrinter.print(buildTicket(sale, bizName || "MI POS"));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   return (
     <div className="modal-overlay">
       <div className="modal" style={{ textAlign: "center" }}>
