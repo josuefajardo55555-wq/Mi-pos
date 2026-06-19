@@ -161,6 +161,47 @@ const css = `
   .barcode-cam-btn:hover { background: #00c896; color: #1a1f2e; }
   .barcode-scanned { border-color: #00c896 !important; box-shadow: 0 0 0 2px rgba(0,200,150,.25) !important; }
   .barcode-hint { font-size: 10px; color: #6b7280; margin-top: 4px; }
+  /* ─── AI Chat ─── */
+  .ai-fab { position: fixed; bottom: 72px; right: 16px; width: 52px; height: 52px; border-radius: 50%; background: linear-gradient(135deg, #00c896, #00a87a); border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 24px; z-index: 400; box-shadow: 0 4px 20px rgba(0,200,150,.4); transition: transform .15s; }
+  .ai-fab:hover { transform: scale(1.08); }
+  .ai-fab .ai-fab-badge { position: absolute; top: -2px; right: -2px; width: 16px; height: 16px; background: #ef4444; border-radius: 50%; border: 2px solid #1a1f2e; animation: pulse-badge 2s infinite; }
+  @keyframes pulse-badge { 0%,100%{transform:scale(1)} 50%{transform:scale(1.2)} }
+  .ai-panel { position: fixed; inset: 0; z-index: 500; display: flex; flex-direction: column; background: #1a1f2e; }
+  .ai-panel-header { display: flex; align-items: center; gap: 10px; padding: 14px 16px; background: #141824; border-bottom: 1px solid #2a3045; flex-shrink: 0; }
+  .ai-avatar { width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(135deg,#00c896,#00a87a); display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; }
+  .ai-panel-title { flex: 1; }
+  .ai-panel-title h3 { font-size: 14px; font-weight: 700; color: #e8eaf0; margin: 0; }
+  .ai-panel-title p { font-size: 11px; color: #6b7280; margin: 0; }
+  .ai-close-btn { background: none; border: none; color: #6b7280; font-size: 22px; cursor: pointer; padding: 4px; }
+  .ai-clear-btn { background: none; border: 1px solid #3a4158; border-radius: 6px; color: #6b7280; font-size: 11px; cursor: pointer; padding: 4px 8px; }
+  .ai-messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+  .ai-msg { display: flex; gap: 8px; max-width: 90%; }
+  .ai-msg.user { flex-direction: row-reverse; align-self: flex-end; }
+  .ai-msg.assistant { align-self: flex-start; }
+  .ai-msg-bubble { padding: 10px 13px; border-radius: 16px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+  .ai-msg.user .ai-msg-bubble { background: #1e3a2f; border: 1px solid #00c896; color: #e8eaf0; border-bottom-right-radius: 4px; }
+  .ai-msg.assistant .ai-msg-bubble { background: #252b3b; border: 1px solid #3a4158; color: #e8eaf0; border-bottom-left-radius: 4px; }
+  .ai-msg-avatar { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0; margin-top: 2px; }
+  .ai-msg.user .ai-msg-avatar { background: #2a3045; }
+  .ai-msg.assistant .ai-msg-avatar { background: linear-gradient(135deg,#00c896,#00a87a); }
+  .ai-typing { display: flex; gap: 4px; align-items: center; padding: 10px 13px; }
+  .ai-typing span { width: 7px; height: 7px; background: #6b7280; border-radius: 50%; animation: ai-dot 1.4s infinite; }
+  .ai-typing span:nth-child(2) { animation-delay: .2s; }
+  .ai-typing span:nth-child(3) { animation-delay: .4s; }
+  @keyframes ai-dot { 0%,80%,100%{transform:scale(.6);opacity:.4} 40%{transform:scale(1);opacity:1} }
+  .ai-suggestions { display: flex; gap: 6px; overflow-x: auto; padding: 8px 16px 4px; flex-shrink: 0; }
+  .ai-suggestions::-webkit-scrollbar { height: 0; }
+  .ai-suggestion { background: #252b3b; border: 1px solid #3a4158; border-radius: 16px; padding: 6px 12px; font-size: 11px; color: #9ca3af; cursor: pointer; white-space: nowrap; font-family: 'Inter', sans-serif; }
+  .ai-suggestion:hover { border-color: #00c896; color: #00c896; }
+  .ai-input-row { display: flex; gap: 8px; padding: 12px 16px; background: #141824; border-top: 1px solid #2a3045; flex-shrink: 0; }
+  .ai-input { flex: 1; background: #252b3b; border: 1px solid #3a4158; border-radius: 20px; padding: 10px 14px; color: #e8eaf0; font-size: 13px; outline: none; font-family: 'Inter', sans-serif; resize: none; max-height: 100px; line-height: 1.4; }
+  .ai-input:focus { border-color: #00c896; }
+  .ai-send-btn { width: 40px; height: 40px; border-radius: 50%; background: linear-gradient(135deg,#00c896,#00a87a); border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; align-self: flex-end; }
+  .ai-send-btn:disabled { opacity: .4; cursor: not-allowed; }
+  .ai-welcome { text-align: center; padding: 30px 20px; color: #6b7280; }
+  .ai-welcome .ai-welcome-icon { font-size: 48px; margin-bottom: 12px; }
+  .ai-welcome h3 { font-size: 16px; font-weight: 700; color: #e8eaf0; margin-bottom: 6px; }
+  .ai-welcome p { font-size: 12px; line-height: 1.6; }
   /* Quagga scanner viewport */
   .camera-video { width: 100%; border-radius: 10px; display: block; background: #000; min-height: 200px; }
   .quagga-aim { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; z-index: 10; }
@@ -1096,6 +1137,158 @@ function PrintBtn({label,onPrint,printer}){
   );
 }
 
+// ─── AI Chat ──────────────────────────────────────────────────────────────────
+const AI_SUGGESTIONS = [
+  "¿Cuánto vendí hoy?",
+  "¿Cuál es mi producto más vendido?",
+  "¿Qué productos tienen stock bajo?",
+  "¿Cuál es mi ticket promedio?",
+  "¿Qué método de pago usan más?",
+  "¿Cuál fue el mejor día de la semana?",
+  "¿A qué hora vendo más?",
+  "Valor total del inventario",
+];
+
+function AIChat({ products, sales, bizName, userProfile, onClose }) {
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const messagesEndRef = useRef(null);
+  const inputRef = useRef(null);
+
+  const scrollToBottom = () => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  useEffect(() => { scrollToBottom(); }, [messages, loading]);
+
+  const send = async (text) => {
+    const content = (text || input).trim();
+    if (!content || loading) return;
+    setInput("");
+
+    const userMsg = { role: "user", content };
+    const newMessages = [...messages, userMsg];
+    setMessages(newMessages);
+    setLoading(true);
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: newMessages,
+          businessContext: {
+            bizName: bizName || "MI POS",
+            products,
+            sales,
+            userRole: userProfile?.role || "owner",
+          },
+        }),
+      });
+
+      if (!res.ok) throw new Error(`Error ${res.status}`);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let assistantContent = "";
+      setMessages(prev => [...prev, { role: "assistant", content: "" }]);
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        for (const line of chunk.split("\n")) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (data.content) {
+              assistantContent += data.content;
+              setMessages(prev => {
+                const updated = [...prev];
+                updated[updated.length - 1] = { role: "assistant", content: assistantContent };
+                return updated;
+              });
+            }
+            if (data.error) throw new Error(data.error);
+          } catch {}
+        }
+      }
+    } catch (err) {
+      setMessages(prev => [...prev, { role: "assistant", content: `⚠️ Error: ${err.message || "No se pudo conectar con el asistente."}` }]);
+    } finally {
+      setLoading(false);
+      setTimeout(() => inputRef.current?.focus(), 100);
+    }
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+  };
+
+  return (
+    <div className="ai-panel">
+      <div className="ai-panel-header">
+        <div className="ai-avatar">🤖</div>
+        <div className="ai-panel-title">
+          <h3>Asistente {bizName || "Mi POS"}</h3>
+          <p>Datos en tiempo real · claude-sonnet</p>
+        </div>
+        {messages.length > 0 && (
+          <button className="ai-clear-btn" onClick={() => setMessages([])}>Limpiar</button>
+        )}
+        <button className="ai-close-btn" onClick={onClose}>✕</button>
+      </div>
+
+      <div className="ai-messages">
+        {messages.length === 0 && (
+          <div className="ai-welcome">
+            <div className="ai-welcome-icon">🤖</div>
+            <h3>Hola, soy tu asistente</h3>
+            <p>Tengo acceso completo a tus ventas, inventario y reportes en tiempo real. Preguntame lo que quieras sobre tu negocio.</p>
+          </div>
+        )}
+        {messages.map((msg, i) => (
+          <div key={i} className={`ai-msg ${msg.role}`}>
+            <div className="ai-msg-avatar">{msg.role === "user" ? "👤" : "🤖"}</div>
+            <div className="ai-msg-bubble">{msg.content}</div>
+          </div>
+        ))}
+        {loading && messages[messages.length - 1]?.role !== "assistant" && (
+          <div className="ai-msg assistant">
+            <div className="ai-msg-avatar">🤖</div>
+            <div className="ai-msg-bubble">
+              <div className="ai-typing"><span/><span/><span/></div>
+            </div>
+          </div>
+        )}
+        <div ref={messagesEndRef} />
+      </div>
+
+      {messages.length === 0 && (
+        <div className="ai-suggestions">
+          {AI_SUGGESTIONS.map((s) => (
+            <button key={s} className="ai-suggestion" onClick={() => send(s)}>{s}</button>
+          ))}
+        </div>
+      )}
+
+      <div className="ai-input-row">
+        <textarea
+          ref={inputRef}
+          className="ai-input"
+          placeholder="Preguntá sobre tus ventas, stock o reportes..."
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={handleKeyDown}
+          rows={1}
+          disabled={loading}
+        />
+        <button className="ai-send-btn" onClick={() => send()} disabled={!input.trim() || loading}>
+          ➤
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── SuccessModal ──────────────────────────────────────────────────────────────
 function SuccessModal({ sale, onClose, btPrinter, wifiPrinter, bizName }) {
   const [httpStatus, setHttpStatus] = useState<"idle"|"printing"|"ok"|"error">("idle");
@@ -1901,6 +2094,7 @@ export default function App() {
   const btPrinter   = useBTPrinter();
   const wifiPrinter = useWifiPrinter();
   const [bizName, setBizName] = useState(() => localStorage.getItem("mi-pos-biz-name") || "MI POS");
+  const [aiOpen, setAiOpen] = useState(false);
 
   useEffect(() => {
     // Timeout fallback: if Firebase doesn't respond in 8s, stop loading
@@ -2023,6 +2217,8 @@ export default function App() {
 
   const titles = { sale: "Mi POS 2", inventory: "Inventario", history: "Historial", reports: "Reportes", perms: "Mi Equipo" };
 
+  const canUseAI = isOwner || (userProfile?.permissions?.sell || userProfile?.permissions?.viewReports || userProfile?.permissions?.viewInventory);
+
   return (
     <>
       <style>{css}</style>
@@ -2040,6 +2236,20 @@ export default function App() {
           {view === "reports" && <ReportsView sales={sales} products={products} btPrinter={btPrinter} wifiPrinter={wifiPrinter} bizName={bizName} setBizName={setBizName} />}
           {view === "perms" && <PermissionsView />}
         </div>
+        {canUseAI && !aiOpen && (
+          <button className="ai-fab" onClick={() => setAiOpen(true)} title="Asistente IA">
+            🤖
+          </button>
+        )}
+        {canUseAI && aiOpen && (
+          <AIChat
+            products={products}
+            sales={sales}
+            bizName={bizName}
+            userProfile={userProfile}
+            onClose={() => setAiOpen(false)}
+          />
+        )}
         <nav className="bottom-nav">
           {navItems.map(n => <button key={n.id} className={`bn-btn${view === n.id ? " active" : ""}`} onClick={() => setView(n.id)}><span className="bn-icon">{n.icon}</span>{n.label}</button>)}
         </nav>
