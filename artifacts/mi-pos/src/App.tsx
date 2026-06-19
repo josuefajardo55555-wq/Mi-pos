@@ -170,7 +170,7 @@ const css = `
   .ai-fab:hover { transform: scale(1.08); }
   .ai-fab .ai-fab-badge { position: absolute; top: -2px; right: -2px; width: 16px; height: 16px; background: #ef4444; border-radius: 50%; border: 2px solid #1a1f2e; animation: pulse-badge 2s infinite; }
   @keyframes pulse-badge { 0%,100%{transform:scale(1)} 50%{transform:scale(1.2)} }
-  .ai-panel { position: fixed; inset: 0; z-index: 500; display: flex; flex-direction: column; background: #1a1f2e; }
+  .ai-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: #1a1f2e; }
   .ai-panel-header { display: flex; align-items: center; gap: 10px; padding: 14px 16px; background: #141824; border-bottom: 1px solid #2a3045; flex-shrink: 0; }
   .ai-avatar { width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(135deg,#00c896,#00a87a); display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; }
   .ai-panel-title { flex: 1; }
@@ -1287,7 +1287,6 @@ function AIChat({ products, sales, bizName, userProfile, onClose }) {
         {messages.length > 0 && (
           <button className="ai-clear-btn" onClick={() => setMessages([])}>Limpiar</button>
         )}
-        <button className="ai-close-btn" onClick={onClose}>✕</button>
       </div>
 
       <div className="ai-messages">
@@ -2699,7 +2698,6 @@ export default function App() {
   const btPrinter   = useBTPrinter();
   const wifiPrinter = useWifiPrinter();
   const [bizName, setBizName] = useState(() => localStorage.getItem("mi-pos-biz-name") || "MI POS");
-  const [aiOpen, setAiOpen] = useState(false);
 
   useEffect(() => {
     // Timeout fallback: if Firebase doesn't respond in 8s, stop loading
@@ -2812,17 +2810,18 @@ export default function App() {
   const isOwner = userProfile?.role === "owner";
   const perms = userProfile?.permissions || {};
 
+  const canUseAI = isOwner || perms.sell || perms.viewReports || perms.viewInventory;
+
   const navItems = [
-    { id: "sale", icon: "🛒", label: "Venta", show: perms.sell || isOwner },
+    { id: "sale",      icon: "🛒", label: "Venta",      show: perms.sell || isOwner },
     { id: "inventory", icon: "📦", label: "Inventario", show: perms.viewInventory || isOwner },
-    { id: "history", icon: "📋", label: "Historial", show: isOwner },
-    { id: "reports", icon: "📊", label: "Reportes", show: perms.viewReports || isOwner },
-    { id: "perms", icon: "👥", label: "Equipo", show: isOwner },
+    { id: "history",   icon: "📋", label: "Historial",  show: isOwner },
+    { id: "reports",   icon: "📊", label: "Reportes",   show: perms.viewReports || isOwner },
+    { id: "perms",     icon: "👥", label: "Equipo",     show: isOwner },
+    { id: "ai",        icon: "🤖", label: "IA",         show: canUseAI },
   ].filter(n => n.show);
 
-  const titles = { sale: "Mi POS 2", inventory: "Inventario", history: "Historial", reports: "Reportes", perms: "Mi Equipo" };
-
-  const canUseAI = isOwner || (userProfile?.permissions?.sell || userProfile?.permissions?.viewReports || userProfile?.permissions?.viewInventory);
+  const titles = { sale: "Mi POS 2", inventory: "Inventario", history: "Historial", reports: "Reportes", perms: "Mi Equipo", ai: "Asistente IA" };
 
   return (
     <>
@@ -2835,26 +2834,13 @@ export default function App() {
           <button className="logout-btn" onClick={() => signOut(auth)}>Salir</button>
         </div>
         <div className="main">
-          {view === "sale" && <SaleView products={products} userProfile={userProfile} categories={categories} btPrinter={btPrinter} wifiPrinter={wifiPrinter} bizName={bizName} />}
+          {view === "sale"      && <SaleView products={products} userProfile={userProfile} categories={categories} btPrinter={btPrinter} wifiPrinter={wifiPrinter} bizName={bizName} />}
           {view === "inventory" && <InventoryView products={products} userProfile={userProfile} categories={categories} />}
-          {view === "history" && <HistoryView sales={sales} />}
-          {view === "reports" && <ReportsView sales={sales} products={products} btPrinter={btPrinter} wifiPrinter={wifiPrinter} bizName={bizName} setBizName={setBizName} />}
-          {view === "perms" && <PermissionsView />}
+          {view === "history"   && <HistoryView sales={sales} />}
+          {view === "reports"   && <ReportsView sales={sales} products={products} btPrinter={btPrinter} wifiPrinter={wifiPrinter} bizName={bizName} setBizName={setBizName} />}
+          {view === "perms"     && <PermissionsView />}
+          {view === "ai" && canUseAI && <AIChat products={products} sales={sales} bizName={bizName} userProfile={userProfile} />}
         </div>
-        {canUseAI && !aiOpen && (
-          <button className="ai-fab" onClick={() => setAiOpen(true)} title="Asistente IA">
-            🤖
-          </button>
-        )}
-        {canUseAI && aiOpen && (
-          <AIChat
-            products={products}
-            sales={sales}
-            bizName={bizName}
-            userProfile={userProfile}
-            onClose={() => setAiOpen(false)}
-          />
-        )}
         <nav className="bottom-nav">
           {navItems.map(n => <button key={n.id} className={`bn-btn${view === n.id ? " active" : ""}`} onClick={() => setView(n.id)}><span className="bn-icon">{n.icon}</span>{n.label}</button>)}
         </nav>
