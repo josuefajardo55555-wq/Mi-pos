@@ -1322,15 +1322,23 @@ function SaleView({ products, userProfile, categories }) {
   const localId = useContext(LocalCtx);
   const handlePay = async (method, received, change) => {
     const saleData = { method, received, change, total, items: cart.map(i => ({ id: i.id, name: i.name, price: i.price, qty: i.qty, unit: i.unit })), date: serverTimestamp(), cashier: userProfile?.email || "" };
+
+    // 1. Registrar la venta — único await bloqueante
     const saleRef = await addDoc(collection(db, "locals", localId, "sales"), saleData);
-    // Update stock
-    for (const item of cart) {
-      const newStock = Math.max(0, (item.stock || 0) - item.qty);
-      await updateDoc(doc(db, "locals", localId, "products", item.id), { stock: newStock });
-    }
+
+    // 2. Mostrar el modal de éxito inmediatamente (no esperar las actualizaciones de stock)
     setSuccessModal({ ...saleData, id: saleRef.id });
     setCart([]);
     setPayModal(false);
+
+    // 3. Actualizar stock de todos los productos en paralelo en el fondo
+    const stockSnapshot = cart; // captura el carrito antes de que se limpie
+    Promise.all(
+      stockSnapshot.map(item => {
+        const newStock = Math.max(0, (item.stock || 0) - item.qty);
+        return updateDoc(doc(db, "locals", localId, "products", item.id), { stock: newStock });
+      })
+    ).catch(() => {/* onSnapshot resincroniza si alguna falla */});
   };
 
   const getCatEmoji = (cat) => ({ "Lácteos": "🥛", "Bebidas": "🥤", "Higiene": "🧴", "Limpieza": "🧹", "Frutas y Verd.": "🥦", "Snacks": "🍪", "Enlatados": "🥫", "Panadería": "🍞" }[cat] || "📦");
