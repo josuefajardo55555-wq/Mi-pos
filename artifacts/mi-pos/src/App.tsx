@@ -1014,205 +1014,6 @@ function ProductModal({ product, onSave, onClose, categories }) {
   );
 }
 
-// ─── SuccessModal ─────────────────────────────────────────────────────────────
-// ─── ESC/POS utilities ────────────────────────────────────────────────────────
-const _ESC=0x1B,_GS=0x1D,_LF=0x0A,_PW=32;
-function escNorm(s){return String(s).normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^\x20-\x7E]/g,"?");}
-function escBytes(text){const t=escNorm(text);const b=[];for(let i=0;i<t.length;i++)b.push(t.charCodeAt(i));b.push(_LF);return b;}
-function escCenter(text){const t=escNorm(text);const pad=Math.max(0,Math.floor((_PW-t.length)/2));return escBytes(" ".repeat(pad)+t);}
-function escLR(left,right){const l=escNorm(left),r=escNorm(right);const gap=Math.max(1,_PW-l.length-r.length);return escBytes(l+" ".repeat(gap)+r);}
-function escSep(ch="-"){return escBytes(ch.repeat(_PW));}
-
-function buildTicket(sale,biz="MI POS"){
-  const now=sale.date?.toDate?sale.date.toDate():new Date();
-  const ds=now.toLocaleDateString("es-AR"),ts=now.toLocaleTimeString("es-AR",{hour:"2-digit",minute:"2-digit"});
-  const b=[_ESC,0x40,_ESC,0x61,0x01,_ESC,0x45,0x01,_GS,0x21,0x11,...escBytes(biz),_GS,0x21,0x00,_ESC,0x45,0x00,
-    ...escSep("="),...escCenter(`${ds}  ${ts}`),...escCenter(`Folio: ${(sale.id||"").slice(-8)}`),
-    ...escSep("-"),_ESC,0x61,0x00];
-  for(const item of(sale.items||[])){
-    const nm=escNorm(item.name).slice(0,17).padEnd(17);
-    const qt=`x${Number(item.qty).toFixed(item.type==="kg"?2:0)}`.padStart(5);
-    const pr=`$${Number(item.price*item.qty).toLocaleString("es-AR",{minimumFractionDigits:2,maximumFractionDigits:2})}`.padStart(8);
-    b.push(...escBytes(nm+qt+pr));
-  }
-  b.push(...escSep("-"),_ESC,0x45,0x01,...escLR("TOTAL:",fmt(sale.total)),_ESC,0x45,0x00,...escLR("Metodo:",sale.method||""));
-  if(sale.method==="Efectivo"){b.push(...escLR("Recibido:",fmt(sale.received||0)),...escLR("Vuelto:",fmt(Math.max(0,sale.change||0))));}
-  b.push(...escSep("="),_ESC,0x61,0x01,...escCenter("Gracias por su compra!"),_LF,_LF,_LF,_GS,0x56,0x41,0x10);
-  return new Uint8Array(b);
-}
-
-function buildSalesReport(sales,biz="MI POS"){
-  const today=new Date().toLocaleDateString("es-AR");
-  const ts=sales.filter(s=>{try{return(s.date?.toDate?s.date.toDate():new Date(s.date)).toLocaleDateString("es-AR")===today;}catch{return false;}});
-  const total=ts.reduce((s,v)=>s+v.total,0);
-  const b=[_ESC,0x40,_ESC,0x61,0x01,_ESC,0x45,0x01,_GS,0x21,0x11,...escBytes(biz),_GS,0x21,0x00,_ESC,0x45,0x00,
-    ...escSep("="),...escCenter("REPORTE DE VENTAS"),...escCenter(today),...escSep("="),_ESC,0x61,0x00,
-    _ESC,0x45,0x01,...escLR("Transacciones:",String(ts.length)),...escLR("Total vendido:",fmt(total)),_ESC,0x45,0x00,...escSep("-")];
-  for(const s of ts.slice(0,20)){
-    const d=s.date?.toDate?s.date.toDate():new Date(s.date);
-    b.push(...escLR(d.toLocaleTimeString("es-AR",{hour:"2-digit",minute:"2-digit"})+" "+escNorm(s.method||""),fmt(s.total)));
-  }
-  if(ts.length>20)b.push(...escBytes(`  ...y ${ts.length-20} mas`));
-  b.push(...escSep("="),_ESC,0x61,0x01,...escCenter("Mi POS"),_LF,_LF,_LF,_GS,0x56,0x41,0x10);
-  return new Uint8Array(b);
-}
-
-function buildLowStockReport(products,biz="MI POS"){
-  const low=products.filter(p=>p.stock<(p.minStock??6));
-  const b=[_ESC,0x40,_ESC,0x61,0x01,_ESC,0x45,0x01,_GS,0x21,0x11,...escBytes(biz),_GS,0x21,0x00,_ESC,0x45,0x00,
-    ...escSep("="),...escCenter("STOCK BAJO"),...escCenter(new Date().toLocaleDateString("es-AR")),...escSep("="),_ESC,0x61,0x00];
-  if(low.length===0){b.push(...escCenter("Todo en orden! :)"));}
-  else{
-    b.push(_ESC,0x45,0x01,...escBytes("Producto          Stk  Min"),_ESC,0x45,0x00,...escSep("-"));
-    for(const p of low){
-      const nm=escNorm(p.name).slice(0,18).padEnd(18);
-      b.push(...escBytes(nm+String(p.stock).padStart(4)+String(p.minStock??6).padStart(4)));
-    }
-  }
-  b.push(...escSep("="),_ESC,0x61,0x01,...escCenter("Mi POS"),_LF,_LF,_LF,_GS,0x56,0x41,0x10);
-  return new Uint8Array(b);
-}
-
-// ─── Bluetooth printer hook ────────────────────────────────────────────────────
-const BT_PROFILES=[
-  {svc:"000018f0-0000-1000-8000-00805f9b34fb",chr:"00002af1-0000-1000-8000-00805f9b34fb"},
-  {svc:"e7810a71-73ae-499d-8c15-faa9aef0c3f2",chr:"bef8d6c9-9c21-4c9e-b632-bd58c1009f9f"},
-  {svc:"49535343-fe7d-4ae5-8fa9-9fafd205e455",chr:"49535343-8841-43f4-a8d4-ecbe34729bb3"},
-  {svc:"6e400001-b5a3-f393-e0a9-e50e24dcca9e",chr:"6e400002-b5a3-f393-e0a9-e50e24dcca9e"},
-];
-
-function useBTPrinter(){
-  const [status,setStatus]=useState("idle"); // idle|connecting|connected|printing|error
-  const [errMsg,setErrMsg]=useState("");
-  const [devName,setDevName]=useState("");
-  const charRef=useRef(null);
-  const devRef=useRef(null);
-
-  const connect=async()=>{
-    if(!navigator?.bluetooth){setStatus("error");setErrMsg("Web Bluetooth no disponible. Usa Chrome en Android.");return false;}
-    setStatus("connecting");setErrMsg("");
-    try{
-      const dev=await navigator.bluetooth.requestDevice({acceptAllDevices:true,optionalServices:BT_PROFILES.map(p=>p.svc)});
-      devRef.current=dev;setDevName(dev.name||"Impresora");
-      dev.addEventListener("gattserverdisconnected",()=>{charRef.current=null;setStatus("idle");setDevName("");});
-      const server=await dev.gatt.connect();
-      let chr=null;
-      for(const prof of BT_PROFILES){try{const svc=await server.getPrimaryService(prof.svc);chr=await svc.getCharacteristic(prof.chr);break;}catch{}}
-      if(!chr){
-        try{
-          const svcs=await server.getPrimaryServices();
-          outer:for(const svc of svcs){const chars=await svc.getCharacteristics();for(const c of chars){if(c.properties.writeWithoutResponse||c.properties.write){chr=c;break outer;}}}
-        }catch{}
-      }
-      if(!chr)throw new Error("No se encontro caracteristica de escritura. Probá con otra impresora.");
-      charRef.current=chr;setStatus("connected");return true;
-    }catch(err){
-      charRef.current=null;setDevName("");
-      if(err.name==="NotFoundError"){setStatus("idle");}
-      else{setStatus("error");setErrMsg(err.message||String(err));}
-      return false;
-    }
-  };
-
-  const disconnect=()=>{devRef.current?.gatt?.disconnect();charRef.current=null;setStatus("idle");setDevName("");};
-
-  const print=async(bytes)=>{
-    if(!charRef.current){const ok=await connect();if(!ok)return;}
-    setStatus("printing");
-    try{
-      const chr=charRef.current;
-      const noResp=chr.properties.writeWithoutResponse;
-      for(let i=0;i<bytes.length;i+=100){
-        const chunk=bytes.slice(i,i+100);
-        if(noResp&&chr.writeValueWithoutResponse)await chr.writeValueWithoutResponse(chunk);
-        else await chr.writeValue(chunk);
-        await new Promise(r=>setTimeout(r,50));
-      }
-      setStatus("connected");
-    }catch(err){setStatus("error");setErrMsg(err.message||String(err));}
-  };
-
-  return {status,errMsg,devName,connect,disconnect,print};
-}
-
-// ─── WiFi printer hook ────────────────────────────────────────────────────────
-const WIFI_HTTP_URL = "http://10.0.0.100:3000/imprimir";
-
-/** Convierte Uint8Array a base64 para el bridge Android o el servidor HTTP local */
-function toBase64(bytes: Uint8Array): string {
-  let bin = "";
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-  return btoa(bin);
-}
-
-/** Devuelve true si la app corre dentro de la APK nativa con bridge Android */
-function hasAndroidBridge(): boolean {
-  return typeof (window as any).AndroidPrinter !== "undefined" &&
-    typeof (window as any).AndroidPrinter.imprimir === "function";
-}
-
-function useWifiPrinter() {
-  const [status, setStatus] = useState("idle");
-  const [errMsg, setErrMsg] = useState("");
-
-  // HTTP es stateless — no hay conexión persistente que manejar
-  const connect = async () => true;
-  const disconnect = () => { setStatus("idle"); setErrMsg(""); };
-
-  const print = async (bytes: Uint8Array) => {
-    // ── Camino 1: bridge nativo de la APK (window.AndroidPrinter) ──────────
-    if (hasAndroidBridge()) {
-      setStatus("printing");
-      try {
-        (window as any).AndroidPrinter.imprimir(toBase64(bytes));
-        await new Promise(r => setTimeout(r, 400));
-        setStatus("idle");
-      } catch (err: any) {
-        setStatus("error");
-        setErrMsg(err.message || String(err));
-      }
-      return;
-    }
-    // ── Camino 2: servidor HTTP local en Termux (10.0.0.106:3000) ─────────
-    setStatus("printing");
-    try {
-      const res = await fetch(WIFI_HTTP_URL, {
-        method: "POST",
-        headers: { "Content-Type": "text/plain" },
-        body: toBase64(bytes),
-      });
-      if (!res.ok) throw new Error(`Error HTTP ${res.status}`);
-      await new Promise(r => setTimeout(r, 400));
-      setStatus("idle");
-    } catch (err: any) {
-      setStatus("error");
-      setErrMsg(`No se pudo imprimir (${err.message || err}). Verificá que el servidor de impresión esté activo.`);
-    }
-  };
-
-  const devName = hasAndroidBridge() ? "Impresora (APK)" : "WiFi OCOM";
-  return { status, errMsg, devName, connect, disconnect, print };
-}
-
-// ─── PrintBtn ──────────────────────────────────────────────────────────────────
-function PrintBtn({label,onPrint,printer}){
-  const {status,errMsg,devName}=printer;
-  const busy=status==="printing"||status==="connecting";
-  const conn=status==="connected";
-  const txt=status==="printing"?"Imprimiendo...":status==="connecting"?"Conectando...":conn?label:`📡 ${label}`;
-  return(
-    <div style={{marginBottom:8}}>
-      <button className={`print-btn${conn?" bt-connected":""}`} onClick={onPrint} disabled={busy}>
-        <span style={{fontSize:15}}>{busy?"⏳":conn?"🖨️":"📡"}</span>
-        <span>{txt}</span>
-        {conn&&devName&&<span style={{fontSize:10,opacity:0.65,marginLeft:"auto",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:80}}>{devName}</span>}
-        {conn&&<button onClick={e=>{e.stopPropagation();printer.disconnect();}} style={{marginLeft:4,background:"none",border:"none",color:"#6b7280",cursor:"pointer",fontSize:13,padding:0}} title="Desconectar">✕</button>}
-      </button>
-      {status==="error"&&errMsg&&<div className="bt-error">⚠️ {errMsg}</div>}
-    </div>
-  );
-}
-
 // ─── AI Chat ──────────────────────────────────────────────────────────────────
 const AI_SUGGESTIONS = [
   "¿Cuánto vendí hoy?",
@@ -1225,7 +1026,7 @@ const AI_SUGGESTIONS = [
   "Valor total del inventario",
 ];
 
-function AIChat({ products, sales, bizName, userProfile, onClose }) {
+function AIChat({ products, sales, userProfile }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -1252,7 +1053,7 @@ function AIChat({ products, sales, bizName, userProfile, onClose }) {
         body: JSON.stringify({
           messages: newMessages,
           businessContext: {
-            bizName: bizName || "MI POS",
+            bizName: "MI POS",
             products,
             sales,
             userRole: userProfile?.role || "owner",
@@ -1304,7 +1105,7 @@ function AIChat({ products, sales, bizName, userProfile, onClose }) {
       <div className="ai-panel-header">
         <div className="ai-avatar">🤖</div>
         <div className="ai-panel-title">
-          <h3>Asistente {bizName || "Mi POS"}</h3>
+          <h3>Asistente Mi POS</h3>
           <p>Datos en tiempo real · claude-sonnet</p>
         </div>
         {messages.length > 0 && (
@@ -1365,7 +1166,7 @@ function AIChat({ products, sales, bizName, userProfile, onClose }) {
 }
 
 // ─── SuccessModal ──────────────────────────────────────────────────────────────
-function SuccessModal({ sale, onClose, btPrinter, wifiPrinter, bizName }) {
+function SuccessModal({ sale, onClose }) {
   return (
     <div className="modal-overlay">
       <div className="modal" style={{ textAlign: "center" }}>
@@ -1377,22 +1178,14 @@ function SuccessModal({ sale, onClose, btPrinter, wifiPrinter, bizName }) {
           {sale.method === "Efectivo" && <><div className="success-row"><span>Recibido</span><span>{fmt(sale.received)}</span></div><div className="success-row"><span>Vuelto</span><span>{fmt(Math.max(0, sale.change))}</span></div></>}
           <div className="success-row"><span>Total</span><span>{fmt(sale.total)}</span></div>
         </div>
-        <div style={{ marginBottom: 4 }}>
-          <div style={{ fontSize: 10, color: "#9ca3af", textAlign: "left", marginBottom: 4, fontWeight: 600 }}>WiFi — OCOM</div>
-          <PrintBtn label="Imprimir ticket (WiFi)" onPrint={() => wifiPrinter.print(buildTicket(sale, bizName || "MI POS"))} printer={wifiPrinter} />
-        </div>
-        <div style={{ marginBottom: 8 }}>
-          <div style={{ fontSize: 10, color: "#9ca3af", textAlign: "left", marginBottom: 4, fontWeight: 600 }}>Bluetooth</div>
-          <PrintBtn label="Imprimir ticket (BT)" onPrint={() => btPrinter.print(buildTicket(sale, bizName || "MI POS"))} printer={btPrinter} />
-        </div>
-        <button className="btn-primary" onClick={onClose} style={{ width: "100%", marginTop: 4 }}>Nueva venta</button>
+        <button className="btn-primary" onClick={onClose} style={{ width: "100%", marginTop: 16 }}>Nueva venta</button>
       </div>
     </div>
   );
 }
 
 // ─── SaleView ─────────────────────────────────────────────────────────────────
-function SaleView({ products, userProfile, categories, btPrinter, wifiPrinter, bizName }) {
+function SaleView({ products, userProfile, categories }) {
   const [search, setSearch] = useState("");
   const [cat, setCat] = useState("Todas");
   const [cart, setCart] = useState([]);
@@ -1573,7 +1366,7 @@ function SaleView({ products, userProfile, categories, btPrinter, wifiPrinter, b
       )}
       {kgModal && <KgModal product={kgModal} onConfirm={kg => { addToCart(kgModal, kg); setKgModal(null); }} onClose={() => setKgModal(null)} />}
       {payModal && <PayModal total={total} onConfirm={handlePay} onClose={() => setPayModal(false)} />}
-      {successModal && <SuccessModal sale={successModal} onClose={() => setSuccessModal(null)} btPrinter={btPrinter} wifiPrinter={wifiPrinter} bizName={bizName} />}
+      {successModal && <SuccessModal sale={successModal} onClose={() => setSuccessModal(null)} />}
       <div className="products-area">
         <div className="search-row">
           {/* Hidden input whose sole purpose is receiving focus to summon the virtual keyboard.
@@ -2084,7 +1877,7 @@ const RiTooltip = ({ active, payload, label, money }) => {
   );
 };
 
-function ReportsView({ sales, products, btPrinter, wifiPrinter, bizName, setBizName }) {
+function ReportsView({ sales, products }) {
   const [tab, setTab]         = useState("dashboard");
   const [range, setRange]     = useState("mes");
   const [customFrom, setFrom] = useState("");
@@ -2204,7 +1997,6 @@ function ReportsView({ sales, products, btPrinter, wifiPrinter, bizName, setBizN
     { id:"pagos",     label:"💳 Pagos" },
     { id:"productos", label:"🏆 Productos" },
     { id:"stock",     label:"📦 Stock" },
-    { id:"imprimir",  label:"🖨️ Imprimir" },
   ];
 
   const RANGES = [
@@ -2227,23 +2019,19 @@ function ReportsView({ sales, products, btPrinter, wifiPrinter, bizName, setBizN
           ))}
         </div>
 
-        {/* ── Filter bar (hidden for Imprimir) ── */}
-        {tab !== "imprimir" && (
-          <>
-            <div className="ri-filter-bar">
-              {RANGES.map(r => (
-                <button key={r.id} className={`ri-fbtn${r.id==="custom"?" ri-fbtn-custom":""}${range===r.id?" active":""}`}
-                  onClick={() => setRange(r.id)}>{r.label}</button>
-              ))}
-            </div>
-            {range === "custom" && (
-              <div className="ri-custom-dates">
-                <input type="date" value={customFrom} onChange={e => setFrom(e.target.value)} />
-                <span style={{ color:"#6b7280", fontSize:11 }}>→</span>
-                <input type="date" value={customTo}   onChange={e => setTo(e.target.value)} />
-              </div>
-            )}
-          </>
+        {/* ── Filter bar ── */}
+        <div className="ri-filter-bar">
+          {RANGES.map(r => (
+            <button key={r.id} className={`ri-fbtn${r.id==="custom"?" ri-fbtn-custom":""}${range===r.id?" active":""}`}
+              onClick={() => setRange(r.id)}>{r.label}</button>
+          ))}
+        </div>
+        {range === "custom" && (
+          <div className="ri-custom-dates">
+            <input type="date" value={customFrom} onChange={e => setFrom(e.target.value)} />
+            <span style={{ color:"#6b7280", fontSize:11 }}>→</span>
+            <input type="date" value={customTo}   onChange={e => setTo(e.target.value)} />
+          </div>
         )}
 
         <div className="ri-scroll">
@@ -2596,25 +2384,6 @@ function ReportsView({ sales, products, btPrinter, wifiPrinter, bizName, setBizN
             </div>
           </>)}
 
-          {/* ════════════════ IMPRIMIR ════════════════ */}
-          {tab === "imprimir" && (
-            <div className="print-section" style={{ marginBottom:0 }}>
-              <h3>🖨️ IMPRIMIR</h3>
-              <div style={{ marginBottom: 10 }}>
-                <label style={{ fontSize: 11, color: "#9ca3af", display: "block", marginBottom: 4 }}>Nombre del negocio en tickets</label>
-                <input className="product-input" value={bizName} onChange={e => { setBizName(e.target.value); localStorage.setItem("mi-pos-biz-name", e.target.value); }} placeholder="MI POS" style={{ fontSize: 13, marginBottom: 0 }} />
-              </div>
-              <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 5, marginTop: 10, fontWeight: 600 }}>📡 WiFi — OCOM OCPP-80K</div>
-              <PrintBtn label="Ventas del día" onPrint={() => wifiPrinter.print(buildSalesReport(sales, bizName))} printer={wifiPrinter} />
-              <PrintBtn label="Stock bajo" onPrint={() => wifiPrinter.print(buildLowStockReport(products, bizName))} printer={wifiPrinter} />
-              <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4, lineHeight: 1.5 }}>Envía los datos a localhost:9200/imprimir (servidor en la APK).</div>
-              <div style={{ fontSize: 11, color: "#9ca3af", margin: "10px 0 5px", fontWeight: 600 }}>🔵 Bluetooth</div>
-              <PrintBtn label="Ventas del día" onPrint={() => btPrinter.print(buildSalesReport(sales, bizName))} printer={btPrinter} />
-              <PrintBtn label="Stock bajo" onPrint={() => btPrinter.print(buildLowStockReport(products, bizName))} printer={btPrinter} />
-              <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4, lineHeight: 1.5 }}>Primera vez: selector Bluetooth para elegir impresora.</div>
-            </div>
-          )}
-
         </div>{/* ri-scroll */}
       </div>{/* ri-wrap */}
     </div>
@@ -2839,9 +2608,6 @@ export default function App() {
   const [sales, setSales]           = useState([]);
   const [initialized, setInitialized] = useState(false);
   const [categories, setCategories] = useState(CATEGORIES.filter(c => c !== "Todas"));
-  const btPrinter   = useBTPrinter();
-  const wifiPrinter = useWifiPrinter();
-  const [bizName, setBizName] = useState(() => localStorage.getItem("mi-pos-biz-name") || "MI POS");
   const [activeLocal, setActiveLocal] = useState(() => localStorage.getItem("mi-pos-active-local") || "local1");
   const [localMenuOpen, setLocalMenuOpen] = useState(false);
 
@@ -3011,12 +2777,12 @@ export default function App() {
           <button className="logout-btn" onClick={() => signOut(auth)}>Salir</button>
         </div>
         <div className="main">
-          {view === "sale"      && <SaleView products={products} userProfile={userProfile} categories={categories} btPrinter={btPrinter} wifiPrinter={wifiPrinter} bizName={bizName} />}
+          {view === "sale"      && <SaleView products={products} userProfile={userProfile} categories={categories} />}
           {view === "inventory" && <InventoryView products={products} userProfile={userProfile} categories={categories} />}
           {view === "history"   && <HistoryView sales={sales} />}
-          {view === "reports"   && <ReportsView sales={sales} products={products} btPrinter={btPrinter} wifiPrinter={wifiPrinter} bizName={bizName} setBizName={setBizName} />}
+          {view === "reports"   && <ReportsView sales={sales} products={products} />}
           {view === "perms"     && <PermissionsView />}
-          {view === "ai" && canUseAI && <AIChat products={products} sales={sales} bizName={bizName} userProfile={userProfile} />}
+          {view === "ai" && canUseAI && <AIChat products={products} sales={sales} userProfile={userProfile} />}
         </div>
         <nav className="bottom-nav">
           {navItems.map(n => <button key={n.id} className={`bn-btn${view === n.id ? " active" : ""}`} onClick={() => setView(n.id)}><span className="bn-icon">{n.icon}</span>{n.label}</button>)}
