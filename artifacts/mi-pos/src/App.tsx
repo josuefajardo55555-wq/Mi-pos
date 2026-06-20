@@ -542,6 +542,7 @@ function OffModal({ barcode, offName, offBrand, offImg, found, categories, onClo
   const [name, setName]         = useState(offName || "");
   const [cat, setCat]           = useState(categories?.[0] ?? "General");
   const [price, setPrice]       = useState("");
+  const [stock, setStock]       = useState("0");
   const [minStock, setMinStock] = useState("5");
   const [img, setImg]           = useState(offImg || "");  // URL of product image
   const [imgOk, setImgOk]       = useState(!!offImg);     // true once <img> loads without error
@@ -561,7 +562,7 @@ function OffModal({ barcode, offName, offBrand, offImg, found, categories, onClo
         name:     name.trim(),
         category: cat || "General",
         price:    parseFloat(price),
-        stock:    0,
+        stock:    parseFloat(stock) || 0,
         minStock: parseFloat(minStock) || 5,
         type:     "unit",
         unit:     "u",
@@ -646,6 +647,14 @@ function OffModal({ barcode, offName, offBrand, offImg, found, categories, onClo
                 <div className="modal-label">Precio ($)</div>
                 <input className="modal-input" type="number" min="0" step="0.01"
                   placeholder="0.00" value={price} onChange={e => setPrice(e.target.value)}
+                  style={{ fontFamily: "monospace" }} />
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <div className="modal-section" style={{ flex: 1 }}>
+                <div className="modal-label">Stock actual</div>
+                <input className="modal-input" type="number" min="0" step="1"
+                  placeholder="0" value={stock} onChange={e => setStock(e.target.value)}
                   style={{ fontFamily: "monospace" }} />
               </div>
               <div className="modal-section" style={{ flex: 1 }}>
