@@ -480,7 +480,7 @@ function ScannerModal({ products, onFound, onNotFound, onClose }) {
       html5QrRef.current = scanner;
 
       await scanner.start(
-        { facingMode: "environment" },
+        { facingMode: { ideal: "environment" } },
         { fps: 10, qrbox: { width: 250, height: 120 } },
         (code) => handleCode(code),
         () => {} // per-frame decode error — expected for non-barcode frames
@@ -500,8 +500,12 @@ function ScannerModal({ products, onFound, onNotFound, onClose }) {
       const m = err?.message || String(err);
       if (/NotAllowed|PermissionDenied/i.test(m)) {
         setStatus("Permiso de cámara denegado. Usá el ingreso manual.");
+      } else if (/NotFound|DevicesNotFound|no camera/i.test(m)) {
+        setStatus("No se encontró cámara en este dispositivo.");
+      } else if (/NotReadable|TrackStart/i.test(m)) {
+        setStatus("Cámara en uso por otra app. Cerrá otras apps y volvé a intentar.");
       } else {
-        setStatus("Cámara no disponible. Ingresá el código manualmente.");
+        setStatus(`Cámara no disponible: ${m}`);
       }
       setStatusType("notfound");
     });
