@@ -1244,15 +1244,26 @@ function buildEscPos(sale, bizName = "MI POS") {
   const buf = [];
   const push = (...xs) => xs.forEach(x => Array.isArray(x) ? buf.push(...x) : buf.push(x));
   const lf = () => buf.push(0x0A);
-  const ascii = (s = "") => s
-    .replace(/[áàäâ]/g, "a").replace(/[ÁÀÄÂ]/g, "A")
-    .replace(/[éèëê]/g, "e").replace(/[ÉÈËÊ]/g, "E")
-    .replace(/[íìïî]/g, "i").replace(/[ÍÌÏÎ]/g, "I")
-    .replace(/[óòöô]/g, "o").replace(/[ÓÒÖÔ]/g, "O")
-    .replace(/[úùüû]/g, "u").replace(/[ÚÙÜÛ]/g, "U")
-    .replace(/ñ/g, "n").replace(/Ñ/g, "N")
-    .replace(/[^\x00-\x7F]/g, "?");
-  const str = (s) => [...ascii(s)].forEach(c => buf.push(c.charCodeAt(0)));
+
+  // CP850 byte map — página de códigos estándar ESC/POS para español/latín
+  const CP850 = {
+    'á':0xA0,'é':0x82,'í':0xA1,'ó':0xA2,'ú':0xA3,
+    'Á':0xB5,'É':0x90,'Í':0xD6,'Ó':0xE0,'Ú':0xE9,
+    'ñ':0xA4,'Ñ':0xA5,
+    'ü':0x81,'ö':0x94,'ä':0x84,'ë':0x89,'ï':0x8B,
+    'Ü':0x9A,'Ö':0x99,'Ä':0x8E,
+    'à':0x85,'è':0x8A,'ì':0x8D,'ò':0x95,'ù':0x97,
+    'â':0x83,'ê':0x88,'î':0x8C,'ô':0x93,'û':0x96,
+    '¿':0xA8,'¡':0xAD,'°':0xF8,'©':0xBD,
+    '€':0xD5,
+  };
+  // Convierte string a bytes CP850 (Latin-1 compatible para impresoras ESC/POS)
+  const str = (s = "") => [...String(s)].forEach(c => {
+    const code = c.charCodeAt(0);
+    if (code < 0x80) buf.push(code);
+    else if (CP850[c] !== undefined) buf.push(CP850[c]);
+    else buf.push(0x3F); // '?'
+  });
   const line = (s) => { str(s); lf(); };
   const fmtP = (n) => "$" + (n || 0).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const now = new Date();
@@ -1262,6 +1273,7 @@ function buildEscPos(sale, bizName = "MI POS") {
   const padL = (s, n) => String(s).padStart(n, " ");
 
   push(0x1B, 0x40);                    // ESC @ — init
+  push(0x1B, 0x74, 0x02);             // ESC t 2 — codepage CP850 (latin/español)
   push(0x1B, 0x61, 0x01);             // center
   push(0x1D, 0x21, 0x01);             // 2× height
   push(0x1B, 0x45, 0x01);             // bold on
@@ -1276,7 +1288,7 @@ function buildEscPos(sale, bizName = "MI POS") {
   line(SEP);
 
   (sale.items || []).forEach(item => {
-    line(padR(ascii(item.name || ""), W));
+    line(padR(item.name || "", W));
     const qtyS = item.qty + "x @ " + fmtP(item.price);
     const totS = fmtP((item.price || 0) * (item.qty || 1));
     line(padR(qtyS, W - totS.length) + totS);
@@ -1290,7 +1302,7 @@ function buildEscPos(sale, bizName = "MI POS") {
   push(0x1D, 0x21, 0x00); push(0x1B, 0x45, 0x00); push(0x1B, 0x61, 0x00);
 
   line(SEP);
-  line("Metodo: " + ascii(sale.method || ""));
+  line("Método: " + (sale.method || ""));
   if (sale.method === "Efectivo") {
     line("Recibido: " + fmtP(sale.received));
     line("Vuelto:   " + fmtP(Math.max(0, sale.change || 0)));
