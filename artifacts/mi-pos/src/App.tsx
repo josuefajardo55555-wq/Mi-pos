@@ -102,6 +102,20 @@ const css = `
   .docs-chat-input-row { display: flex; gap: 8px; padding: 8px 16px 12px; border-top: 1px solid #2a3045; flex-shrink: 0; }
   .doc-msg-user { align-self: flex-end; background: #00c896; color: #0d1117; border-radius: 12px 12px 2px 12px; padding: 7px 11px; max-width: 85%; font-size: 13px; white-space: pre-wrap; }
   .doc-msg-ai { align-self: flex-start; background: #252b3b; color: #e8eaf0; border-radius: 2px 12px 12px 12px; padding: 7px 11px; max-width: 90%; font-size: 13px; white-space: pre-wrap; }
+  /* multi-file upload grid */
+  .docs-upload-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(86px, 1fr)); gap: 8px; margin-bottom: 14px; max-height: 230px; overflow-y: auto; }
+  .docs-upload-thumb { position: relative; aspect-ratio: 1; border-radius: 8px; overflow: hidden; background: #252b3b; border: 1px solid #2a3045; }
+  .docs-upload-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .docs-upload-pdf-icon { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; }
+  .docs-upload-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 22px; border-radius: 8px; pointer-events: none; }
+  .docs-upload-overlay.uploading { background: rgba(0,0,0,0.45); }
+  .docs-upload-overlay.done { background: rgba(0,200,150,0.18); }
+  .docs-upload-overlay.error { background: rgba(185,28,28,0.32); }
+  .docs-upload-fname { font-size: 9px; color: #9ca3af; text-align: center; padding: 0 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 100%; }
+  .docs-ok-banner { background: #0d2b1e; border: 1px solid #00c896; border-radius: 10px; padding: 10px 14px; color: #00c896; font-size: 13px; font-weight: 600; text-align: center; margin-bottom: 10px; }
+  .docs-err-banner { background: #2d1010; border: 1px solid #f87171; border-radius: 10px; padding: 10px 14px; color: #f87171; font-size: 12px; margin-bottom: 10px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spin { display: inline-block; animation: spin 0.8s linear infinite; }
   .main { flex: 1; overflow: hidden; display: flex; flex-direction: column; padding-bottom: 60px; }
   .content { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
   @media (min-width: 700px) {
@@ -2661,6 +2675,43 @@ function PermissionsView() {
 // ─── DocsView ─────────────────────────────────────────────────────────────────
 const DOC_TYPES = ["Boleta", "Remito", "Recibo", "Otro"];
 
+// Comprime imagen a JPEG 70%, máximo 1200px
+async function compressImage(file) {
+  if (!file.type.startsWith("image/")) return { blob: file, mime: file.type };
+  return new Promise((resolve) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const MAX = 1200;
+      let w = img.width, h = img.height;
+      if (w > MAX || h > MAX) {
+        if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
+        else       { w = Math.round(w * MAX / h); h = MAX; }
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = w; canvas.height = h;
+      canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+      canvas.toBlob(blob => resolve({ blob, mime: "image/jpeg" }), "image/jpeg", 0.7);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve({ blob: file, mime: file.type }); };
+    img.src = url;
+  });
+}
+
+// Traduce errores de Firebase Storage a mensajes en español
+function storageErrMsg(err) {
+  const code = err?.code || "";
+  if (code.includes("unauthorized") || code.includes("permission") || err?.message?.includes("403"))
+    return "Sin permisos de escritura en Storage. En Firebase Console → Storage → Reglas, permitir escritura a usuarios autenticados.";
+  if (code.includes("canceled"))   return "Subida cancelada.";
+  if (code.includes("quota"))      return "Cuota de almacenamiento superada.";
+  if (err?.message === "timeout")  return "Tiempo agotado (30 s). Verificá la conexión.";
+  if (code.includes("network") || err?.message?.includes("network") || err?.message?.includes("fetch"))
+    return "Error de red. Verificá la conexión a internet.";
+  return err?.message || "Error desconocido al subir.";
+}
+
 function DocsView({ userProfile }) {
   const localId = useContext(LocalCtx);
 
@@ -2672,59 +2723,87 @@ function DocsView({ userProfile }) {
     return onSnapshot(q, snap => setDocs(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
   }, [localId]);
 
-  // ── Upload flow ────────────────────────────────────────────────────────────
-  const fileInputRef  = useRef(null);
-  const [uploadFile, setUploadFile]     = useState(null);
-  const [uploadPreview, setUploadPreview] = useState(null);
-  const [docType, setDocType]   = useState("Boleta");
-  const [docName, setDocName]   = useState("");
-  const [docDate, setDocDate]   = useState(() => new Date().toISOString().split("T")[0]);
-  const [uploading, setUploading] = useState(false);
+  // ── Multi-file upload ──────────────────────────────────────────────────────
+  // items: [{ id, file, preview, status: 'pending'|'uploading'|'done'|'error', error }]
+  const fileInputRef = useRef(null);
+  const [items, setItems]     = useState([]);
+  const [docType, setDocType] = useState("Boleta");
+  const [docName, setDocName] = useState("");
+  const [docDate, setDocDate] = useState(() => new Date().toISOString().split("T")[0]);
+  const [summary, setSummary] = useState(null); // { ok, failed, errors }
+
+  const setItemStatus = (id, status, error = null) =>
+    setItems(prev => prev.map(it => it.id === id ? { ...it, status, error } : it));
 
   const handleFileSelect = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setUploadFile(file);
-    setDocName(file.name.replace(/\.[^.]+$/, ""));
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    setSummary(null);
+    setDocName(files[0].name.replace(/\.[^.]+$/, ""));
     setDocDate(new Date().toISOString().split("T")[0]);
     setDocType("Boleta");
-    if (file.type.startsWith("image/")) {
-      setUploadPreview(URL.createObjectURL(file));
-    } else {
-      setUploadPreview(null);
-    }
+    setItems(files.map(f => ({
+      id: Math.random().toString(36).slice(2),
+      file: f,
+      preview: f.type.startsWith("image/") ? URL.createObjectURL(f) : null,
+      status: "pending",
+      error: null,
+    })));
     e.target.value = "";
   };
 
-  const handleUpload = async () => {
-    if (!uploadFile || uploading) return;
-    setUploading(true);
+  const uploadOne = async (item) => {
+    setItemStatus(item.id, "uploading");
     try {
-      const ext = uploadFile.name.split(".").pop() || "bin";
+      const { blob, mime } = await compressImage(item.file);
+      const ext = mime === "image/jpeg" ? "jpg" : (item.file.name.split(".").pop() || "bin");
       const path = `locals/${localId}/documents/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
-      const storageRef = ref(storage, path);
-      await uploadBytes(storageRef, uploadFile);
-      const fileUrl = await getDownloadURL(storageRef);
+      const sRef = ref(storage, path);
+
+      // 30-second timeout
+      const timeout = new Promise((_, rej) => setTimeout(() => rej({ message: "timeout" }), 30000));
+      await Promise.race([uploadBytes(sRef, blob, { contentType: mime }), timeout]);
+      const fileUrl = await getDownloadURL(sRef);
+
       await addDoc(collection(db, "locals", localId, "documents"), {
-        type: docType, name: docName.trim() || uploadFile.name,
-        date: docDate, fileUrl, fileName: uploadFile.name,
-        mimeType: uploadFile.type,
+        type: docType,
+        name: docName.trim() || item.file.name,
+        date: docDate,
+        fileUrl,
+        fileName: item.file.name,
+        mimeType: mime,
         uploadedBy: userProfile?.email || "",
         createdAt: serverTimestamp(),
       });
-      setUploadFile(null);
-      setUploadPreview(null);
+      setItemStatus(item.id, "done");
+      return { ok: true };
     } catch (err) {
-      alert("Error al subir: " + err.message);
-    } finally {
-      setUploading(false);
+      const msg = storageErrMsg(err);
+      setItemStatus(item.id, "error", msg);
+      return { ok: false, error: msg };
     }
   };
 
+  const handleUploadAll = async () => {
+    if (!items.length) return;
+    setSummary(null);
+    const results = await Promise.all(items.map(uploadOne));
+    const ok     = results.filter(r => r.ok).length;
+    const failed = results.filter(r => !r.ok).length;
+    const errors = [...new Set(results.filter(r => !r.ok).map(r => r.error))];
+    setSummary({ ok, failed, errors });
+    if (failed === 0) {
+      setTimeout(() => { setItems([]); setSummary(null); }, 1400);
+    }
+  };
+
+  const isUploading = items.some(it => it.status === "uploading");
+  const hasModal    = items.length > 0;
+
   // ── AI Chat ────────────────────────────────────────────────────────────────
-  const [chatMsgs, setChatMsgs]     = useState([]);
-  const [chatInput, setChatInput]   = useState("");
-  const [chatBusy, setChatBusy]     = useState(false);
+  const [chatMsgs, setChatMsgs]   = useState([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatBusy, setChatBusy]   = useState(false);
   const chatEndRef = useRef(null);
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [chatMsgs]);
 
@@ -2756,57 +2835,101 @@ function DocsView({ userProfile }) {
           try {
             const data = JSON.parse(line.slice(6));
             if (data.content) { reply += data.content; setChatMsgs(m => [...m.slice(0, -1), { role: "assistant", content: reply }]); }
-            if (data.error) { setChatMsgs(m => [...m.slice(0, -1), { role: "assistant", content: "Error: " + data.error }]); }
+            if (data.error)   { setChatMsgs(m => [...m.slice(0, -1), { role: "assistant", content: "Error: " + data.error }]); }
           } catch {}
         }
       }
-    } catch (err) {
+    } catch {
       setChatMsgs(m => [...m.slice(0, -1), { role: "assistant", content: "Error al conectar con la IA." }]);
     } finally {
       setChatBusy(false);
     }
   };
 
+  const statusIcon = (status) => {
+    if (status === "uploading") return <span className="spin" style={{ fontSize: 18 }}>⏳</span>;
+    if (status === "done")      return "✅";
+    if (status === "error")     return "❌";
+    return null;
+  };
+
   return (
     <div className="docs-wrap">
-      {/* ── Upload form modal ─────────────────────────────────────────────── */}
-      {uploadFile && (
-        <div className="modal-overlay" onClick={() => !uploading && setUploadFile(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 360 }}>
-            <h2>📎 Subir documento</h2>
-            {uploadPreview ? (
-              <img src={uploadPreview} alt="" style={{ width: "100%", maxHeight: 160, objectFit: "contain", borderRadius: 8, background: "#fff", marginBottom: 10 }} />
-            ) : (
-              <div style={{ background: "#252b3b", borderRadius: 8, padding: 16, textAlign: "center", marginBottom: 10 }}>
-                <div style={{ fontSize: 36 }}>📄</div>
-                <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>{uploadFile.name}</div>
+      {/* ── Multi-file upload modal ────────────────────────────────────────── */}
+      {hasModal && (
+        <div className="modal-overlay" onClick={() => !isUploading && (setItems([]), setSummary(null))}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 380 }}>
+            <h2>📎 Subir {items.length} archivo{items.length !== 1 ? "s" : ""}</h2>
+
+            {/* Thumbnails grid */}
+            <div className="docs-upload-grid">
+              {items.map(it => (
+                <div key={it.id} className="docs-upload-thumb">
+                  {it.preview
+                    ? <img src={it.preview} alt="" />
+                    : <div className="docs-upload-pdf-icon">
+                        <span style={{ fontSize: 26 }}>📄</span>
+                        <span className="docs-upload-fname">{it.file.name}</span>
+                      </div>
+                  }
+                  {it.status !== "pending" && (
+                    <div className={`docs-upload-overlay ${it.status}`}>
+                      {statusIcon(it.status)}
+                    </div>
+                  )}
+                  {it.preview && <div className="docs-upload-fname" style={{ position: "absolute", bottom: 2, left: 0, right: 0, background: "rgba(0,0,0,0.5)", padding: "1px 4px" }}>{it.file.name}</div>}
+                </div>
+              ))}
+            </div>
+
+            {/* Summary banners */}
+            {summary && summary.ok > 0 && summary.failed === 0 && (
+              <div className="docs-ok-banner">✅ {summary.ok} archivo{summary.ok !== 1 ? "s" : ""} subido{summary.ok !== 1 ? "s" : ""} correctamente</div>
+            )}
+            {summary && summary.failed > 0 && (
+              <div className="docs-err-banner">
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                  {summary.ok > 0 ? `✅ ${summary.ok} subido${summary.ok !== 1 ? "s" : ""} · ` : ""}
+                  ❌ {summary.failed} con error
+                </div>
+                {summary.errors.map((e, i) => <div key={i} style={{ marginTop: 2 }}>• {e}</div>)}
               </div>
             )}
+
+            {/* Shared form */}
             <div className="modal-section">
               <div className="modal-label">Tipo de documento</div>
-              <select className="modal-input" value={docType} onChange={e => setDocType(e.target.value)}>
+              <select className="modal-input" value={docType} onChange={e => setDocType(e.target.value)} disabled={isUploading}>
                 {DOC_TYPES.map(t => <option key={t}>{t}</option>)}
               </select>
             </div>
             <div className="modal-section">
               <div className="modal-label">Proveedor / Nombre <span style={{ color: "#6b7280" }}>(opcional)</span></div>
-              <input className="modal-input" value={docName} onChange={e => setDocName(e.target.value)} placeholder="Ej: Distribuidora García" />
+              <input className="modal-input" value={docName} onChange={e => setDocName(e.target.value)}
+                placeholder="Ej: Distribuidora García" disabled={isUploading} />
             </div>
             <div className="modal-section">
               <div className="modal-label">Fecha</div>
-              <input className="modal-input" type="date" value={docDate} onChange={e => setDocDate(e.target.value)} />
+              <input className="modal-input" type="date" value={docDate} onChange={e => setDocDate(e.target.value)} disabled={isUploading} />
             </div>
+
             <div className="modal-actions" style={{ marginTop: 12 }}>
-              <button className="btn-secondary" style={{ flex: 1 }} onClick={() => setUploadFile(null)} disabled={uploading}>Cancelar</button>
-              <button className="btn-primary" style={{ flex: 2, opacity: uploading ? 0.6 : 1 }} onClick={handleUpload} disabled={uploading}>
-                {uploading ? "Subiendo..." : "Subir"}
+              <button className="btn-secondary" style={{ flex: 1 }}
+                onClick={() => { setItems([]); setSummary(null); }} disabled={isUploading}>
+                Cancelar
+              </button>
+              <button className="btn-primary" style={{ flex: 2, opacity: isUploading ? 0.65 : 1 }}
+                onClick={handleUploadAll} disabled={isUploading}>
+                {isUploading
+                  ? `Subiendo ${items.filter(i => i.status === "done" || i.status === "error").length}/${items.length}...`
+                  : `Subir ${items.length} archivo${items.length !== 1 ? "s" : ""}`}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* ── Header ─────────────────────────────────────────────────────────── */}
+      {/* ── Header ────────────────────────────────────────────────────────── */}
       <div className="docs-header">
         <span style={{ fontSize: 13, color: "#9ca3af" }}>
           {docs.length === 0 ? "Sin documentos" : `${docs.length} documento${docs.length !== 1 ? "s" : ""}`}
@@ -2815,11 +2938,12 @@ function DocsView({ userProfile }) {
           onClick={() => fileInputRef.current?.click()}>
           + Subir
         </button>
-        <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp,application/pdf"
-          style={{ display: "none" }} onChange={handleFileSelect} capture={undefined} />
+        <input ref={fileInputRef} type="file" multiple
+          accept="image/jpeg,image/png,image/webp,application/pdf"
+          style={{ display: "none" }} onChange={handleFileSelect} />
       </div>
 
-      {/* ── Document list ──────────────────────────────────────────────────── */}
+      {/* ── Document list ─────────────────────────────────────────────────── */}
       <div className="docs-list">
         {docs.length === 0 ? (
           <div style={{ textAlign: "center", color: "#6b7280", padding: "28px 0" }}>
@@ -2827,27 +2951,24 @@ function DocsView({ userProfile }) {
             <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Sin documentos</div>
             <div style={{ fontSize: 12 }}>Subí boletas, remitos o recibos para que la IA los analice</div>
           </div>
-        ) : (
-          docs.map(doc => (
-            <div key={doc.id} className="doc-card">
-              {doc.mimeType?.startsWith("image/") ? (
-                <img src={doc.fileUrl} alt="" className="doc-thumb" />
-              ) : (
-                <div className="doc-thumb-pdf">📄</div>
-              )}
-              <div className="doc-info">
-                <div className="doc-type">{doc.type}</div>
-                <div className="doc-name">{doc.name || doc.fileName}</div>
-                <div className="doc-date">{doc.date}</div>
-              </div>
-              <a href={doc.fileUrl} target="_blank" rel="noopener noreferrer"
-                style={{ color: "#6b7280", fontSize: 20, textDecoration: "none", padding: "4px 6px", flexShrink: 0 }}>↗</a>
+        ) : docs.map(doc => (
+          <div key={doc.id} className="doc-card">
+            {doc.mimeType?.startsWith("image/")
+              ? <img src={doc.fileUrl} alt="" className="doc-thumb" />
+              : <div className="doc-thumb-pdf">📄</div>
+            }
+            <div className="doc-info">
+              <div className="doc-type">{doc.type}</div>
+              <div className="doc-name">{doc.name || doc.fileName}</div>
+              <div className="doc-date">{doc.date}</div>
             </div>
-          ))
-        )}
+            <a href={doc.fileUrl} target="_blank" rel="noopener noreferrer"
+              style={{ color: "#6b7280", fontSize: 20, textDecoration: "none", padding: "4px 6px", flexShrink: 0 }}>↗</a>
+          </div>
+        ))}
       </div>
 
-      {/* ── AI Chat ────────────────────────────────────────────────────────── */}
+      {/* ── AI Chat ───────────────────────────────────────────────────────── */}
       <div className="docs-chat">
         <div className="docs-chat-header">
           <span style={{ fontSize: 11, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.05em" }}>
