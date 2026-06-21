@@ -85,6 +85,23 @@ const css = `
   .more-item { display: flex; flex-direction: column; align-items: center; gap: 6px; background: #252b3b; border: 1px solid #2a3348; border-radius: 14px; padding: 18px 8px 14px; color: #e8eaf0; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; transition: background 0.15s; }
   .more-item:active, .more-item:hover { background: #2e3650; }
   .more-item .more-icon { font-size: 26px; line-height: 1; }
+  /* ─── DocsView ─── */
+  .docs-wrap { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  .docs-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid #2a3045; flex-shrink: 0; }
+  .docs-list { flex: 1; overflow-y: auto; padding: 10px 16px; display: flex; flex-direction: column; gap: 8px; }
+  .doc-card { display: flex; align-items: center; gap: 12px; background: #1e2438; border: 1px solid #2a3045; border-radius: 10px; padding: 10px 12px; cursor: default; }
+  .doc-thumb { width: 52px; height: 52px; border-radius: 8px; object-fit: cover; background: #252b3b; flex-shrink: 0; }
+  .doc-thumb-pdf { width: 52px; height: 52px; border-radius: 8px; background: #252b3b; display: flex; align-items: center; justify-content: center; font-size: 24px; flex-shrink: 0; }
+  .doc-info { flex: 1; min-width: 0; }
+  .doc-type { font-size: 10px; font-weight: 700; color: #00c896; text-transform: uppercase; letter-spacing: 0.04em; }
+  .doc-name { font-size: 13px; color: #e8eaf0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin: 1px 0; }
+  .doc-date { font-size: 11px; color: #6b7280; }
+  .docs-chat { display: flex; flex-direction: column; border-top: 2px solid #2a3045; flex-shrink: 0; max-height: 45%; }
+  .docs-chat-header { padding: 7px 16px; background: #141824; flex-shrink: 0; }
+  .docs-chat-msgs { flex: 1; overflow-y: auto; padding: 8px 16px; display: flex; flex-direction: column; gap: 6px; min-height: 80px; }
+  .docs-chat-input-row { display: flex; gap: 8px; padding: 8px 16px 12px; border-top: 1px solid #2a3045; flex-shrink: 0; }
+  .doc-msg-user { align-self: flex-end; background: #00c896; color: #0d1117; border-radius: 12px 12px 2px 12px; padding: 7px 11px; max-width: 85%; font-size: 13px; white-space: pre-wrap; }
+  .doc-msg-ai { align-self: flex-start; background: #252b3b; color: #e8eaf0; border-radius: 2px 12px 12px 12px; padding: 7px 11px; max-width: 90%; font-size: 13px; white-space: pre-wrap; }
   .main { flex: 1; overflow: hidden; display: flex; flex-direction: column; padding-bottom: 60px; }
   .content { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
   @media (min-width: 700px) {
@@ -2641,6 +2658,231 @@ function PermissionsView() {
 }
 
 // ─── APP ROOT ─────────────────────────────────────────────────────────────────
+// ─── DocsView ─────────────────────────────────────────────────────────────────
+const DOC_TYPES = ["Boleta", "Remito", "Recibo", "Otro"];
+
+function DocsView({ userProfile }) {
+  const localId = useContext(LocalCtx);
+
+  // ── Documents list (Firestore) ─────────────────────────────────────────────
+  const [docs, setDocs] = useState([]);
+  useEffect(() => {
+    if (!localId) return;
+    const q = query(collection(db, "locals", localId, "documents"), orderBy("createdAt", "desc"));
+    return onSnapshot(q, snap => setDocs(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+  }, [localId]);
+
+  // ── Upload flow ────────────────────────────────────────────────────────────
+  const fileInputRef  = useRef(null);
+  const [uploadFile, setUploadFile]     = useState(null);
+  const [uploadPreview, setUploadPreview] = useState(null);
+  const [docType, setDocType]   = useState("Boleta");
+  const [docName, setDocName]   = useState("");
+  const [docDate, setDocDate]   = useState(() => new Date().toISOString().split("T")[0]);
+  const [uploading, setUploading] = useState(false);
+
+  const handleFileSelect = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadFile(file);
+    setDocName(file.name.replace(/\.[^.]+$/, ""));
+    setDocDate(new Date().toISOString().split("T")[0]);
+    setDocType("Boleta");
+    if (file.type.startsWith("image/")) {
+      setUploadPreview(URL.createObjectURL(file));
+    } else {
+      setUploadPreview(null);
+    }
+    e.target.value = "";
+  };
+
+  const handleUpload = async () => {
+    if (!uploadFile || uploading) return;
+    setUploading(true);
+    try {
+      const ext = uploadFile.name.split(".").pop() || "bin";
+      const path = `locals/${localId}/documents/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+      const storageRef = ref(storage, path);
+      await uploadBytes(storageRef, uploadFile);
+      const fileUrl = await getDownloadURL(storageRef);
+      await addDoc(collection(db, "locals", localId, "documents"), {
+        type: docType, name: docName.trim() || uploadFile.name,
+        date: docDate, fileUrl, fileName: uploadFile.name,
+        mimeType: uploadFile.type,
+        uploadedBy: userProfile?.email || "",
+        createdAt: serverTimestamp(),
+      });
+      setUploadFile(null);
+      setUploadPreview(null);
+    } catch (err) {
+      alert("Error al subir: " + err.message);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  // ── AI Chat ────────────────────────────────────────────────────────────────
+  const [chatMsgs, setChatMsgs]     = useState([]);
+  const [chatInput, setChatInput]   = useState("");
+  const [chatBusy, setChatBusy]     = useState(false);
+  const chatEndRef = useRef(null);
+  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [chatMsgs]);
+
+  const handleChat = async () => {
+    const text = chatInput.trim();
+    if (!text || chatBusy) return;
+    setChatInput("");
+    const history = [...chatMsgs, { role: "user", content: text }];
+    setChatMsgs(history);
+    setChatBusy(true);
+    setChatMsgs(m => [...m, { role: "assistant", content: "" }]);
+    try {
+      const res = await fetch("/api/docs-chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: history,
+          documents: docs.map(d => ({ url: d.fileUrl, type: d.type, name: d.name, date: d.date, mimeType: d.mimeType })),
+        }),
+      });
+      const reader = res.body?.getReader();
+      const decoder = new TextDecoder();
+      let reply = "";
+      while (reader) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        for (const line of decoder.decode(value, { stream: true }).split("\n")) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (data.content) { reply += data.content; setChatMsgs(m => [...m.slice(0, -1), { role: "assistant", content: reply }]); }
+            if (data.error) { setChatMsgs(m => [...m.slice(0, -1), { role: "assistant", content: "Error: " + data.error }]); }
+          } catch {}
+        }
+      }
+    } catch (err) {
+      setChatMsgs(m => [...m.slice(0, -1), { role: "assistant", content: "Error al conectar con la IA." }]);
+    } finally {
+      setChatBusy(false);
+    }
+  };
+
+  return (
+    <div className="docs-wrap">
+      {/* ── Upload form modal ─────────────────────────────────────────────── */}
+      {uploadFile && (
+        <div className="modal-overlay" onClick={() => !uploading && setUploadFile(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 360 }}>
+            <h2>📎 Subir documento</h2>
+            {uploadPreview ? (
+              <img src={uploadPreview} alt="" style={{ width: "100%", maxHeight: 160, objectFit: "contain", borderRadius: 8, background: "#fff", marginBottom: 10 }} />
+            ) : (
+              <div style={{ background: "#252b3b", borderRadius: 8, padding: 16, textAlign: "center", marginBottom: 10 }}>
+                <div style={{ fontSize: 36 }}>📄</div>
+                <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>{uploadFile.name}</div>
+              </div>
+            )}
+            <div className="modal-section">
+              <div className="modal-label">Tipo de documento</div>
+              <select className="modal-input" value={docType} onChange={e => setDocType(e.target.value)}>
+                {DOC_TYPES.map(t => <option key={t}>{t}</option>)}
+              </select>
+            </div>
+            <div className="modal-section">
+              <div className="modal-label">Proveedor / Nombre <span style={{ color: "#6b7280" }}>(opcional)</span></div>
+              <input className="modal-input" value={docName} onChange={e => setDocName(e.target.value)} placeholder="Ej: Distribuidora García" />
+            </div>
+            <div className="modal-section">
+              <div className="modal-label">Fecha</div>
+              <input className="modal-input" type="date" value={docDate} onChange={e => setDocDate(e.target.value)} />
+            </div>
+            <div className="modal-actions" style={{ marginTop: 12 }}>
+              <button className="btn-secondary" style={{ flex: 1 }} onClick={() => setUploadFile(null)} disabled={uploading}>Cancelar</button>
+              <button className="btn-primary" style={{ flex: 2, opacity: uploading ? 0.6 : 1 }} onClick={handleUpload} disabled={uploading}>
+                {uploading ? "Subiendo..." : "Subir"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
+      <div className="docs-header">
+        <span style={{ fontSize: 13, color: "#9ca3af" }}>
+          {docs.length === 0 ? "Sin documentos" : `${docs.length} documento${docs.length !== 1 ? "s" : ""}`}
+        </span>
+        <button className="btn-primary" style={{ fontSize: 13, padding: "7px 14px" }}
+          onClick={() => fileInputRef.current?.click()}>
+          + Subir
+        </button>
+        <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp,application/pdf"
+          style={{ display: "none" }} onChange={handleFileSelect} capture={undefined} />
+      </div>
+
+      {/* ── Document list ──────────────────────────────────────────────────── */}
+      <div className="docs-list">
+        {docs.length === 0 ? (
+          <div style={{ textAlign: "center", color: "#6b7280", padding: "28px 0" }}>
+            <div style={{ fontSize: 44, marginBottom: 8 }}>📂</div>
+            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Sin documentos</div>
+            <div style={{ fontSize: 12 }}>Subí boletas, remitos o recibos para que la IA los analice</div>
+          </div>
+        ) : (
+          docs.map(doc => (
+            <div key={doc.id} className="doc-card">
+              {doc.mimeType?.startsWith("image/") ? (
+                <img src={doc.fileUrl} alt="" className="doc-thumb" />
+              ) : (
+                <div className="doc-thumb-pdf">📄</div>
+              )}
+              <div className="doc-info">
+                <div className="doc-type">{doc.type}</div>
+                <div className="doc-name">{doc.name || doc.fileName}</div>
+                <div className="doc-date">{doc.date}</div>
+              </div>
+              <a href={doc.fileUrl} target="_blank" rel="noopener noreferrer"
+                style={{ color: "#6b7280", fontSize: 20, textDecoration: "none", padding: "4px 6px", flexShrink: 0 }}>↗</a>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* ── AI Chat ────────────────────────────────────────────────────────── */}
+      <div className="docs-chat">
+        <div className="docs-chat-header">
+          <span style={{ fontSize: 11, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+            🤖 Chat — Preguntá sobre tus documentos
+          </span>
+        </div>
+        <div className="docs-chat-msgs">
+          {chatMsgs.length === 0 && (
+            <div style={{ color: "#6b7280", fontSize: 12, fontStyle: "italic", padding: "6px 0" }}>
+              Ej: "¿cuánto pagué por harina?" · "Mostrame boletas de mayo" · "¿Qué gasté en Distribuidora García?"
+            </div>
+          )}
+          {chatMsgs.map((m, i) => (
+            <div key={i} className={m.role === "user" ? "doc-msg-user" : "doc-msg-ai"}>
+              {m.content || (chatBusy && m.role === "assistant" ? "▌" : "")}
+            </div>
+          ))}
+          <div ref={chatEndRef} />
+        </div>
+        <div className="docs-chat-input-row">
+          <input className="modal-input" style={{ flex: 1, margin: 0 }}
+            placeholder="Preguntá sobre los documentos..."
+            value={chatInput} onChange={e => setChatInput(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && !e.shiftKey && handleChat()}
+            disabled={chatBusy} />
+          <button className="btn-primary" style={{ padding: "8px 14px", flexShrink: 0 }}
+            onClick={handleChat} disabled={chatBusy || !chatInput.trim()}>
+            {chatBusy ? "▌" : "→"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [userProfile, setUserProfile] = useState(null);
@@ -2833,13 +3075,7 @@ export default function App() {
           {view === "reports"   && <ReportsView sales={sales} products={products} />}
           {view === "perms"     && <PermissionsView />}
           {view === "ai" && canUseAI && <AIChat products={products} sales={sales} userProfile={userProfile} />}
-          {view === "docs"      && (
-            <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 12, color: "#6b7280" }}>
-              <div style={{ fontSize: 48 }}>📄</div>
-              <div style={{ fontSize: 14, fontWeight: 600 }}>Documentos</div>
-              <div style={{ fontSize: 12 }}>Próximamente</div>
-            </div>
-          )}
+          {view === "docs"      && <DocsView userProfile={userProfile} />}
         </div>
 
         {/* ── Modal "Más" ────────────────────────────────────────────── */}

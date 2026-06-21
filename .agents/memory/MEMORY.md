@@ -1,2 +1,1 @@
-- [AI Chat integration](ai-chat.md) — endpoint /api/chat SSE streaming, no zod in api-server routes (esbuild can't resolve zod/v4 subpath), use manual validation instead.
-- [Multi-local architecture](multi-local.md) — LocalCtx context propaga localId; rutas Firestore = locals/{localId}/...; colaboradores tienen localId en su doc de users
+- [Anthropic lib stale build](anthropic-lib-build.md) — lib/integrations-anthropic-ai necesita `cd lib/integrations-anthropic-ai && npx tsc --build` antes de typecheck en api-server si no tiene dist/.
