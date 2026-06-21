@@ -1317,8 +1317,10 @@ function buildEscPos(sale, bizName = "MI POS") {
   // Corte automático
   bytes.push(GS, 0x56, 0x41, 0x00);
 
-  // Devuelve base64 directamente
-  return btoa(String.fromCharCode(...bytes));
+  // Convertir a base64 con loop (no spread) para evitar stack overflow en arrays grandes
+  let b64str = "";
+  for (let i = 0; i < bytes.length; i++) b64str += String.fromCharCode(bytes[i]);
+  return btoa(b64str);
 }
 
 // Canvas ticket for PNG download fallback
@@ -1392,6 +1394,17 @@ function PrintOptionsModal({ sale, bizName, userProfile, onClose }) {
   // buildEscPos devuelve base64 directamente
   const ticketB64 = useMemo(() => buildEscPos(sale, bizName), [sale, bizName]);
 
+  // Diagnóstico: primeros 20 bytes en hex (deben empezar con 1B 40)
+  const hexDiag = useMemo(() => {
+    try {
+      const raw = atob(ticketB64);
+      const out = [];
+      for (let i = 0; i < Math.min(20, raw.length); i++)
+        out.push(raw.charCodeAt(i).toString(16).toUpperCase().padStart(2, "0"));
+      return out.join(" ");
+    } catch { return "ERROR al decodificar base64"; }
+  }, [ticketB64]);
+
   useEffect(() => {
     if (!uid) return;
     const unsub = onSnapshot(doc(db, "users", uid, "settings", "printer"), snap => {
@@ -1418,6 +1431,9 @@ function PrintOptionsModal({ sale, bizName, userProfile, onClose }) {
     setWifiSt("connecting"); setWifiErr("");
     try {
       const b64 = ticketB64;
+      // Log diagnóstico: primeros bytes deben ser 1B 40
+      console.log("[ESC/POS] hex bytes 0-20:", hexDiag);
+      console.log("[ESC/POS] base64 length:", b64.length, "| primeros 40 chars:", b64.slice(0, 40));
       setWifiSt("printing");
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), 10000);
@@ -1584,7 +1600,27 @@ function PrintOptionsModal({ sale, bizName, userProfile, onClose }) {
           </div>
         )}
 
-        <button className="btn-secondary" style={{ width: "100%", marginTop: 4 }} onClick={onClose}>
+        {/* Diagnóstico hex — ayuda a verificar que los datos ESC/POS son correctos */}
+        <details style={{ marginTop: 12 }}>
+          <summary style={{ fontSize: 11, color: "#6b7280", cursor: "pointer", userSelect: "none" }}>
+            🔬 Diagnóstico (primeros 20 bytes)
+          </summary>
+          <div style={{ marginTop: 8, background: "#111827", borderRadius: 6, padding: "8px 10px" }}>
+            <div style={{ fontFamily: "monospace", fontSize: 12, color: hexDiag.startsWith("1B 40") ? "#00c896" : "#f87171", letterSpacing: "0.05em", wordBreak: "break-all" }}>
+              {hexDiag}
+            </div>
+            <div style={{ fontSize: 10, color: "#6b7280", marginTop: 4 }}>
+              {hexDiag.startsWith("1B 40")
+                ? "✅ Bytes correctos — el problema está en el servidor"
+                : "❌ Bytes incorrectos — el problema está en la generación del ticket"}
+            </div>
+            <div style={{ fontSize: 10, color: "#4b5563", marginTop: 2 }}>
+              Deben empezar con: <span style={{ color: "#e8eaf0" }}>1B 40</span> (ESC @)
+            </div>
+          </div>
+        </details>
+
+        <button className="btn-secondary" style={{ width: "100%", marginTop: 12 }} onClick={onClose}>
           {anyOk ? "Cerrar" : "Omitir impresión"}
         </button>
       </div>
