@@ -76,6 +76,15 @@ const css = `
   .bn-btn { display: flex; flex-direction: column; align-items: center; gap: 2px; background: none; border: none; color: #6b7280; font-size: 10px; cursor: pointer; padding: 4px 10px; font-family: 'Inter', sans-serif; }
   .bn-btn .bn-icon { font-size: 20px; }
   .bn-btn.active { color: #00c896; }
+  .more-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 200; }
+  .more-sheet { position: fixed; bottom: 0; left: 0; right: 0; background: #1a1f2e; border-radius: 20px 20px 0 0; padding: 16px 20px 32px; z-index: 201; animation: slideUp 0.22s ease-out; }
+  @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+  .more-handle { width: 36px; height: 4px; background: #3a4158; border-radius: 2px; margin: 0 auto 18px; }
+  .more-sheet-title { color: #6b7280; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; text-align: center; margin-bottom: 16px; }
+  .more-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .more-item { display: flex; flex-direction: column; align-items: center; gap: 6px; background: #252b3b; border: 1px solid #2a3348; border-radius: 14px; padding: 18px 8px 14px; color: #e8eaf0; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; transition: background 0.15s; }
+  .more-item:active, .more-item:hover { background: #2e3650; }
+  .more-item .more-icon { font-size: 26px; line-height: 1; }
   .main { flex: 1; overflow: hidden; display: flex; flex-direction: column; padding-bottom: 60px; }
   .content { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
   @media (min-width: 700px) {
@@ -2638,6 +2647,7 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState("");
   const [view, setView] = useState("sale");
+  const [moreOpen, setMoreOpen] = useState(false);
   const [products, setProducts]     = useState([]);
   const [sales, setSales]           = useState([]);
   const [initialized, setInitialized] = useState(false);
@@ -2769,12 +2779,18 @@ export default function App() {
     { id: "sale",      icon: "🛒", label: "Venta",      show: perms.sell || isOwner },
     { id: "inventory", icon: "📦", label: "Inventario", show: perms.viewInventory || isOwner },
     { id: "history",   icon: "📋", label: "Historial",  show: isOwner },
-    { id: "reports",   icon: "📊", label: "Reportes",   show: perms.viewReports || isOwner },
     { id: "perms",     icon: "👥", label: "Equipo",     show: isOwner },
-    { id: "ai",        icon: "🤖", label: "IA",         show: canUseAI },
   ].filter(n => n.show);
 
-  const titles = { sale: "Mi POS 2", inventory: "Inventario", history: "Historial", reports: "Reportes", perms: "Mi Equipo", ai: "Asistente IA" };
+  const moreItems = [
+    { id: "reports", icon: "📊", label: "Reportes",     show: perms.viewReports || isOwner },
+    { id: "ai",      icon: "🤖", label: "Asistente IA", show: canUseAI },
+    { id: "docs",    icon: "📄", label: "Documentos",   show: true },
+  ].filter(n => n.show);
+
+  const titles = { sale: "Mi POS 2", inventory: "Inventario", history: "Historial", reports: "Reportes", perms: "Mi Equipo", ai: "Asistente IA", docs: "Documentos" };
+
+  const goTo = (id) => { setView(id); setMoreOpen(false); };
 
   const switchLocal = (id) => {
     setActiveLocal(id);
@@ -2817,9 +2833,42 @@ export default function App() {
           {view === "reports"   && <ReportsView sales={sales} products={products} />}
           {view === "perms"     && <PermissionsView />}
           {view === "ai" && canUseAI && <AIChat products={products} sales={sales} userProfile={userProfile} />}
+          {view === "docs"      && (
+            <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 12, color: "#6b7280" }}>
+              <div style={{ fontSize: 48 }}>📄</div>
+              <div style={{ fontSize: 14, fontWeight: 600 }}>Documentos</div>
+              <div style={{ fontSize: 12 }}>Próximamente</div>
+            </div>
+          )}
         </div>
+
+        {/* ── Modal "Más" ────────────────────────────────────────────── */}
+        {moreOpen && (
+          <div className="more-overlay" onClick={() => setMoreOpen(false)}>
+            <div className="more-sheet" onClick={e => e.stopPropagation()}>
+              <div className="more-handle" />
+              <div className="more-sheet-title">Más opciones</div>
+              <div className="more-grid">
+                {moreItems.map(item => (
+                  <button key={item.id} className="more-item" onClick={() => goTo(item.id)}>
+                    <span className="more-icon">{item.icon}</span>
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
         <nav className="bottom-nav">
-          {navItems.map(n => <button key={n.id} className={`bn-btn${view === n.id ? " active" : ""}`} onClick={() => setView(n.id)}><span className="bn-icon">{n.icon}</span>{n.label}</button>)}
+          {navItems.map(n => (
+            <button key={n.id} className={`bn-btn${view === n.id ? " active" : ""}`} onClick={() => setView(n.id)}>
+              <span className="bn-icon">{n.icon}</span>{n.label}
+            </button>
+          ))}
+          <button className={`bn-btn${moreOpen || ["reports","ai","docs"].includes(view) ? " active" : ""}`} onClick={() => setMoreOpen(o => !o)}>
+            <span className="bn-icon">⋯</span>Más
+          </button>
         </nav>
       </div>
     </LocalCtx.Provider>
