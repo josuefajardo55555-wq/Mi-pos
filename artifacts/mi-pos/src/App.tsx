@@ -128,6 +128,15 @@ const css = `
   .settings-area { padding: 16px; overflow-y: auto; flex: 1; }
   .settings-section { background: #1e2438; border: 1px solid #2a3045; border-radius: 12px; padding: 16px; margin-bottom: 14px; }
   .settings-section-title { font-size: 13px; font-weight: 700; color: #e8eaf0; margin-bottom: 14px; }
+  /* ─── Location cards ─── */
+  .location-card { background: #252b3b; border: 1px solid #2a3045; border-radius: 10px; padding: 12px 14px; margin-bottom: 8px; }
+  .location-card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .location-name-input { flex: 1; background: transparent; border: none; border-bottom: 1px solid #3a4158; color: #e8eaf0; font-size: 14px; font-weight: 600; padding: 2px 4px; outline: none; }
+  .location-name-input:focus { border-bottom-color: #00c896; }
+  .location-del-btn { background: none; border: none; color: #6b7280; font-size: 18px; cursor: pointer; padding: 0 2px; flex-shrink: 0; transition: color 0.15s; }
+  .location-del-btn:hover { color: #f87171; }
+  .location-add-form { background: #1a1f2e; border: 1px dashed #3a4158; border-radius: 10px; padding: 14px; margin-bottom: 8px; }
+  .loc-select { width: 100%; background: #1a1f2e; border: 1px solid #3a4158; border-radius: 8px; color: #e8eaf0; padding: 8px 10px; font-size: 13px; cursor: pointer; margin-bottom: 6px; }
   .main { flex: 1; overflow: hidden; display: flex; flex-direction: column; padding-bottom: 60px; }
   .content { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
   @media (min-width: 700px) {
@@ -1355,13 +1364,36 @@ function renderTicketCanvas(sale, bizName = "MI POS") {
 }
 
 // ─── PrintOptionsModal ────────────────────────────────────────────────────────
-function PrintOptionsModal({ sale, bizName, onClose }) {
-  const printerIp = localStorage.getItem("mi-pos-printer-ip") || "http://10.0.0.100:3000";
-  const [wifiSt, setWifiSt]   = useState("idle");   // idle|connecting|printing|ok|error
+function PrintOptionsModal({ sale, bizName, userProfile, onClose }) {
+  const uid = userProfile?.id;
+  const [locations, setLocations] = useState([]);
+  const [selLocId, setSelLocId]   = useState(() => localStorage.getItem("mi-pos-printer-location-id") || "");
+  const [wifiSt, setWifiSt]   = useState("idle");
   const [wifiErr, setWifiErr] = useState("");
-  const [btSt, setBtSt]       = useState("idle");   // idle|scanning|connecting|sending|ok|error
+  const [btSt, setBtSt]       = useState("idle");
   const [btErr, setBtErr]     = useState("");
   const ticket = useMemo(() => buildEscPos(sale, bizName), [sale, bizName]);
+
+  useEffect(() => {
+    if (!uid) return;
+    const unsub = onSnapshot(doc(db, "users", uid, "settings", "printer"), snap => {
+      const locs = snap.exists() ? (snap.data().locations || []) : PRINTER_DEFAULT_LOCS;
+      setLocations(locs);
+      if (!locs.find(l => l.id === selLocId) && locs.length > 0) {
+        setSelLocId(locs[0].id);
+      }
+    });
+    return unsub;
+  }, [uid]);
+
+  const selLoc    = locations.find(l => l.id === selLocId);
+  const printerIp = selLoc?.ip || localStorage.getItem("mi-pos-printer-ip") || "http://10.0.0.100:3000";
+
+  const pickLoc = (id) => {
+    setSelLocId(id);
+    localStorage.setItem("mi-pos-printer-location-id", id);
+    setWifiSt("idle"); setWifiErr("");
+  };
 
   const tryWifi = async () => {
     if (["connecting","printing","ok"].includes(wifiSt)) return;
@@ -1464,15 +1496,34 @@ function PrintOptionsModal({ sale, bizName, onClose }) {
             <span className="print-section-icon">🌐</span>
             <div style={{ flex: 1 }}>
               <div className="print-section-title">WiFi</div>
-              <div className="print-section-sub">{printerIp}</div>
+              <div className="print-section-sub">
+                {selLoc ? selLoc.name : printerIp}
+              </div>
             </div>
             <span style={{ fontSize: 18 }}>{stIcon(wifiSt)}</span>
           </div>
+
+          {locations.length > 1 && (
+            <select className="loc-select" value={selLocId}
+              onChange={e => pickLoc(e.target.value)}
+              disabled={wifiBusy || wifiSt === "ok"}>
+              {locations.map(l => (
+                <option key={l.id} value={l.id}>{l.name} — {l.ip}</option>
+              ))}
+            </select>
+          )}
+          {locations.length === 0 && (
+            <div className="print-section-sub" style={{ marginTop: 4, color: "#f87171" }}>
+              Sin ubicaciones configuradas. Agregá una en Ajustes.
+            </div>
+          )}
+
           {wifiSt === "ok"    && <div className="print-ok">✅ Imprimido correctamente</div>}
           {wifiSt === "error" && <div className="print-err">{wifiErr}</div>}
           {wifiSt !== "ok" && (
-            <button className="btn-primary" style={{ width: "100%", marginTop: 8, opacity: wifiBusy ? 0.6 : 1 }}
-              onClick={tryWifi} disabled={wifiBusy}>
+            <button className="btn-primary"
+              style={{ width: "100%", marginTop: 8, opacity: wifiBusy ? 0.6 : 1 }}
+              onClick={tryWifi} disabled={wifiBusy || locations.length === 0}>
               {wifiSt === "connecting" ? "Conectando..." : wifiSt === "printing" ? "Imprimiendo..." : "🖨️ Imprimir por WiFi"}
             </button>
           )}
@@ -1523,9 +1574,9 @@ function PrintOptionsModal({ sale, bizName, onClose }) {
 }
 
 // ─── SuccessModal ──────────────────────────────────────────────────────────────
-function SuccessModal({ sale, bizName, onClose }) {
+function SuccessModal({ sale, bizName, userProfile, onClose }) {
   const [printing, setPrinting] = useState(false);
-  if (printing) return <PrintOptionsModal sale={sale} bizName={bizName} onClose={onClose} />;
+  if (printing) return <PrintOptionsModal sale={sale} bizName={bizName} userProfile={userProfile} onClose={onClose} />;
   return (
     <div className="modal-overlay">
       <div className="modal" style={{ textAlign: "center" }}>
@@ -1747,7 +1798,7 @@ function SaleView({ products, userProfile, categories, localName }) {
       )}
       {kgModal && <KgModal product={kgModal} onConfirm={kg => { addToCart(kgModal, kg); setKgModal(null); }} onClose={() => setKgModal(null)} />}
       {payModal && <PayModal total={total} onConfirm={handlePay} onClose={() => setPayModal(false)} />}
-      {successModal && <SuccessModal sale={successModal} bizName={localName} onClose={() => setSuccessModal(null)} />}
+      {successModal && <SuccessModal sale={successModal} bizName={localName} userProfile={userProfile} onClose={() => setSuccessModal(null)} />}
       <div className="products-area">
         <div className="search-row">
           {/* Hidden input whose sole purpose is receiving focus to summon the virtual keyboard.
@@ -2978,122 +3029,211 @@ function PermissionsView() {
   );
 }
 
-// ─── SettingsView ────────────────────────────────────────────────────────────
-function SettingsView() {
-  const [printerIp, setPrinterIp] = useState(
-    () => localStorage.getItem("mi-pos-printer-ip") || "http://10.0.0.100:3000"
-  );
-  const [testSt, setTestSt]   = useState("idle"); // idle|testing|ok|error
+// ─── LocationCard ─────────────────────────────────────────────────────────────
+function LocationCard({ loc, onChange, onDelete }) {
+  const [name, setName] = useState(loc.name);
+  const [ip,   setIp]   = useState(loc.ip);
+  const [testSt, setTestSt]   = useState("idle");
   const [testMsg, setTestMsg] = useState("");
 
-  const saveIp = (v) => { setPrinterIp(v); localStorage.setItem("mi-pos-printer-ip", v); };
+  useEffect(() => { setName(loc.name); }, [loc.name]);
+  useEffect(() => { setIp(loc.ip); },   [loc.ip]);
 
-  const testPrinter = async () => {
+  const runFetch = async (fn) => {
     setTestSt("testing"); setTestMsg("");
-    const ctrl = new AbortController();
-    const timeout = setTimeout(() => ctrl.abort(), 5000);
-    try {
-      const res = await fetch(printerIp + "/ping", { method: "GET", signal: ctrl.signal }).catch(() => null);
-      clearTimeout(timeout);
-      if (res) {
-        setTestSt("ok");
-        setTestMsg(res.ok ? "Servidor alcanzable y respondiendo." : `Servidor responde (HTTP ${res.status}).`);
-      } else {
-        throw new Error("Sin respuesta");
-      }
-    } catch (err) {
-      clearTimeout(timeout);
+    try { await fn(); }
+    catch (err) {
       setTestSt("error");
-      if (err.name === "AbortError")
-        setTestMsg("Sin respuesta en 5 s. Verificá la IP y que estés en la misma red WiFi.");
-      else
-        setTestMsg(`No se pudo conectar a ${printerIp}.`);
+      setTestMsg(err.name === "AbortError"
+        ? "Sin respuesta."
+        : err.message?.includes("fetch") || err.message?.includes("Failed")
+          ? `No conecta a ${ip}.`
+          : err.message || "Error");
     }
   };
 
-  const sendTestTicket = async () => {
-    setTestSt("testing"); setTestMsg("");
-    try {
-      const fakeSale = {
-        id: "TEST0001", total: 1000, method: "Efectivo", received: 1000, change: 0,
-        items: [{ name: "Producto prueba", qty: 1, price: 1000 }],
-      };
-      const ticket = buildEscPos(fakeSale, "IMPRESORA TEST");
-      const b64 = btoa(ticket.reduce((s, b) => s + String.fromCharCode(b), ""));
-      const ctrl = new AbortController();
-      const timeout = setTimeout(() => ctrl.abort(), 8000);
-      const res = await fetch(`${printerIp}/imprimir`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ticket: b64 }), signal: ctrl.signal,
-      });
-      clearTimeout(timeout);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setTestSt("ok"); setTestMsg("Ticket de prueba enviado correctamente.");
-    } catch (err) {
-      setTestSt("error");
-      if (err.name === "AbortError")
-        setTestMsg("Sin respuesta (8 s). Verificá que la impresora esté encendida.");
-      else if (err.message?.includes("fetch") || err.message?.includes("Failed"))
-        setTestMsg(`No se pudo conectar a ${printerIp}.`);
-      else
-        setTestMsg(err.message || "Error desconocido");
-    }
+  const testPing = () => runFetch(async () => {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 5000);
+    const res = await fetch(ip + "/ping", { method: "GET", signal: ctrl.signal }).catch(() => null);
+    clearTimeout(t);
+    if (!res) { const e = new Error("Sin respuesta"); e.name = "AbortError"; throw e; }
+    setTestSt("ok"); setTestMsg(res.ok ? "Servidor alcanzable." : `Responde HTTP ${res.status}.`);
+  });
+
+  const testPrint = () => runFetch(async () => {
+    const fake = { id: "TEST0001", total: 1000, method: "Efectivo", received: 1000, change: 0, items: [{ name: "Producto prueba", qty: 1, price: 1000 }] };
+    const ticket = buildEscPos(fake, name.toUpperCase());
+    const b64 = btoa(ticket.reduce((s, b) => s + String.fromCharCode(b), ""));
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 8000);
+    const res = await fetch(`${ip}/imprimir`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ticket: b64 }), signal: ctrl.signal });
+    clearTimeout(t);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    setTestSt("ok"); setTestMsg("Ticket de prueba impreso.");
+  });
+
+  return (
+    <div className="location-card">
+      <div className="location-card-header">
+        <span style={{ fontSize: 16 }}>📍</span>
+        <input className="location-name-input" value={name}
+          onChange={e => setName(e.target.value)}
+          onBlur={() => { if (name.trim() && name !== loc.name) onChange("name", name.trim()); }}
+          placeholder="Nombre de la ubicación" />
+        <button className="location-del-btn" onClick={() => {
+          if (window.confirm(`¿Eliminar "${name}"?`)) onDelete();
+        }} title="Eliminar ubicación">🗑️</button>
+      </div>
+      <input className="modal-input" value={ip}
+        onChange={e => setIp(e.target.value)}
+        onBlur={() => { if (ip.trim() && ip !== loc.ip) onChange("ip", ip.trim()); }}
+        placeholder="http://10.0.0.100:3000" />
+      <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+        <button className="btn-secondary"
+          style={{ flex: 1, fontSize: 12, padding: "6px 4px", opacity: testSt === "testing" ? 0.6 : 1 }}
+          onClick={testPing} disabled={testSt === "testing"}>
+          {testSt === "testing" ? "..." : "🔌 Ping"}
+        </button>
+        <button className="btn-secondary"
+          style={{ flex: 1, fontSize: 12, padding: "6px 4px", opacity: testSt === "testing" ? 0.6 : 1 }}
+          onClick={testPrint} disabled={testSt === "testing"}>
+          🖨️ Prueba
+        </button>
+      </div>
+      {testSt === "ok"    && <div className="print-ok">✅ {testMsg}</div>}
+      {testSt === "error" && <div className="print-err">❌ {testMsg}</div>}
+    </div>
+  );
+}
+
+// ─── SettingsView ─────────────────────────────────────────────────────────────
+const PRINTER_DEFAULT_LOCS = [
+  { id: "casa",   name: "Casa",       ip: "http://10.0.0.100:3000" },
+  { id: "local1", name: "Local 1",    ip: "http://10.0.0.101:3000" },
+  { id: "godoy",  name: "Godoy Cruz", ip: "http://10.0.0.102:3000" },
+];
+
+function SettingsView({ userProfile }) {
+  const uid = userProfile?.id;
+  const [locations, setLocations] = useState([]);
+  const [loading, setLoading]     = useState(true);
+  const [saving,  setSaving]      = useState(false);
+  const [showAdd, setShowAdd]     = useState(false);
+  const [newName, setNewName]     = useState("");
+  const [newIp,   setNewIp]       = useState("http://");
+  const saveRef = useRef(null);
+
+  useEffect(() => {
+    if (!uid) return;
+    const unsub = onSnapshot(doc(db, "users", uid, "settings", "printer"), (snap) => {
+      if (snap.exists()) {
+        setLocations(snap.data().locations || []);
+      } else {
+        setDoc(doc(db, "users", uid, "settings", "printer"), { locations: PRINTER_DEFAULT_LOCS });
+        setLocations(PRINTER_DEFAULT_LOCS);
+      }
+      setLoading(false);
+    });
+    return unsub;
+  }, [uid]);
+
+  const persist = async (locs) => {
+    if (!uid) return;
+    setSaving(true);
+    try { await setDoc(doc(db, "users", uid, "settings", "printer"), { locations: locs }); }
+    finally { setSaving(false); }
+  };
+
+  const debouncedPersist = (locs) => {
+    if (saveRef.current) clearTimeout(saveRef.current);
+    saveRef.current = setTimeout(() => persist(locs), 700);
+  };
+
+  const updateLoc = (id, field, value) => {
+    const updated = locations.map(l => l.id === id ? { ...l, [field]: value } : l);
+    setLocations(updated);
+    debouncedPersist(updated);
+  };
+
+  const deleteLoc = (id) => {
+    const updated = locations.filter(l => l.id !== id);
+    setLocations(updated);
+    persist(updated);
+  };
+
+  const addLoc = async () => {
+    if (!newName.trim() || !newIp.trim()) return;
+    const newLoc = { id: Date.now().toString(36), name: newName.trim(), ip: newIp.trim() };
+    const updated = [...locations, newLoc];
+    setLocations(updated);
+    await persist(updated);
+    setNewName(""); setNewIp("http://"); setShowAdd(false);
   };
 
   return (
     <div className="content" style={{ overflowY: "auto" }}>
       <div className="settings-area">
         <div className="settings-section">
-          <div className="settings-section-title">🖨️ Impresora</div>
-
-          <div className="modal-section">
-            <div className="modal-label">IP del servidor de impresión</div>
-            <input className="modal-input" value={printerIp}
-              onChange={e => saveIp(e.target.value)}
-              placeholder="http://10.0.0.100:3000" />
-            <div style={{ fontSize: 11, color: "#6b7280", marginTop: 5, lineHeight: 1.5 }}>
-              El servidor debe aceptar{" "}
-              <code style={{ background: "#252b3b", padding: "1px 5px", borderRadius: 3 }}>POST /imprimir</code>{" "}
-              con el cuerpo <code style={{ background: "#252b3b", padding: "1px 5px", borderRadius: 3 }}>{`{"ticket":"<base64>"}`}</code>.
-              El ticket es ESC/POS estándar codificado en base64.
-            </div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+            <div className="settings-section-title" style={{ marginBottom: 0 }}>🖨️ Ubicaciones de impresora</div>
+            {saving && <span style={{ fontSize: 11, color: "#6b7280" }}>Guardando…</span>}
           </div>
 
-          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-            <button
-              className="btn-secondary"
-              style={{ flex: 1, opacity: testSt === "testing" ? 0.6 : 1 }}
-              onClick={testPrinter}
-              disabled={testSt === "testing"}>
-              {testSt === "testing" ? "Probando..." : "🔌 Probar conexión"}
-            </button>
-            <button
-              className="btn-secondary"
-              style={{ flex: 1, opacity: testSt === "testing" ? 0.6 : 1 }}
-              onClick={sendTestTicket}
-              disabled={testSt === "testing"}>
-              🖨️ Imprimir prueba
-            </button>
-          </div>
+          {loading ? (
+            <div style={{ color: "#6b7280", textAlign: "center", padding: 20, fontSize: 13 }}>Cargando…</div>
+          ) : (
+            <>
+              {locations.length === 0 && !showAdd && (
+                <div style={{ color: "#6b7280", textAlign: "center", padding: "20px 0", fontSize: 13 }}>
+                  No hay ubicaciones. Agregá una para imprimir por WiFi.
+                </div>
+              )}
 
-          {testSt === "ok" && (
-            <div style={{ color: "#00c896", fontSize: 13, marginTop: 10 }}>✅ {testMsg}</div>
-          )}
-          {testSt === "error" && (
-            <div style={{ color: "#f87171", fontSize: 12, marginTop: 10, lineHeight: 1.5 }}>❌ {testMsg}</div>
+              {locations.map(loc => (
+                <LocationCard key={loc.id} loc={loc}
+                  onChange={(field, value) => updateLoc(loc.id, field, value)}
+                  onDelete={() => deleteLoc(loc.id)} />
+              ))}
+
+              {showAdd ? (
+                <div className="location-add-form">
+                  <div className="modal-label">Nombre de la ubicación</div>
+                  <input className="modal-input" value={newName} autoFocus
+                    onChange={e => setNewName(e.target.value)}
+                    onKeyDown={e => e.key === "Enter" && addLoc()}
+                    placeholder="Casa, Depósito, Oficina…" />
+                  <div className="modal-label" style={{ marginTop: 10 }}>IP del servidor</div>
+                  <input className="modal-input" value={newIp}
+                    onChange={e => setNewIp(e.target.value)}
+                    onKeyDown={e => e.key === "Enter" && addLoc()}
+                    placeholder="http://192.168.1.50:3000" />
+                  <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                    <button className="btn-primary" style={{ flex: 1 }} onClick={addLoc}
+                      disabled={!newName.trim() || !newIp.trim()}>Guardar</button>
+                    <button className="btn-secondary" style={{ flex: 1 }} onClick={() => {
+                      setShowAdd(false); setNewName(""); setNewIp("http://");
+                    }}>Cancelar</button>
+                  </div>
+                </div>
+              ) : (
+                <button className="btn-secondary" style={{ width: "100%", marginTop: 4 }}
+                  onClick={() => setShowAdd(true)}>
+                  ＋ Nueva ubicación
+                </button>
+              )}
+            </>
           )}
         </div>
 
         <div className="settings-section">
-          <div className="settings-section-title">ℹ️ Sobre el servidor WiFi</div>
+          <div className="settings-section-title">ℹ️ Cómo funciona</div>
           <div style={{ fontSize: 12, color: "#9ca3af", lineHeight: 1.7 }}>
-            Para imprimir por WiFi necesitás un servidor en la misma red que reciba los tickets
-            y los envíe a la impresora ESC/POS.<br /><br />
-            <strong style={{ color: "#e8eaf0" }}>Opción más simple:</strong> conectá una Raspberry Pi
-            o PC a la impresora por USB y corré un servidor Node.js con la ruta{" "}
-            <code style={{ background: "#252b3b", padding: "1px 5px", borderRadius: 3 }}>POST /imprimir</code>.<br /><br />
-            <strong style={{ color: "#e8eaf0" }}>Bluetooth:</strong> no requiere servidor — imprime
-            directo desde el navegador (solo Chrome Android/Desktop).
+            Cada ubicación tiene su propia IP. Al imprimir podés elegir desde qué ubicación enviarlo.<br /><br />
+            <strong style={{ color: "#e8eaf0" }}>WiFi:</strong> el servidor debe aceptar{" "}
+            <code style={{ background: "#252b3b", padding: "1px 5px", borderRadius: 3 }}>POST /imprimir</code>{" "}
+            con <code style={{ background: "#252b3b", padding: "1px 5px", borderRadius: 3 }}>{`{"ticket":"base64"}`}</code>.<br /><br />
+            <strong style={{ color: "#e8eaf0" }}>Bluetooth:</strong> imprime directo sin servidor (Chrome Android/Desktop).
           </div>
         </div>
       </div>
@@ -3628,7 +3768,7 @@ export default function App() {
           {view === "perms"     && <PermissionsView />}
           {view === "ai" && canUseAI && <AIChat products={products} sales={sales} userProfile={userProfile} />}
           {view === "docs"      && <DocsView userProfile={userProfile} />}
-          {view === "settings"  && <SettingsView />}
+          {view === "settings"  && <SettingsView userProfile={userProfile} />}
         </div>
 
         {/* ── Modal "Más" ────────────────────────────────────────────── */}
