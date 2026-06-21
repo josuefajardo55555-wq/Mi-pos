@@ -1,9 +1,14 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
+    // Imágenes de productos (existente)
     match /products/{file} {
       allow read: if true;
       allow write: if request.auth != null;
+    }
+    // Documentos por local (boletas, remitos, recibos)
+    match /locals/{localId}/documents/{file} {
+      allow read, write: if request.auth != null;
     }
   }
 }
