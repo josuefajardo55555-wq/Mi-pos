@@ -1197,7 +1197,12 @@ function SuccessModal({ sale, onClose }) {
 function SaleView({ products, userProfile, categories }) {
   const [search, setSearch] = useState("");
   const [cat, setCat] = useState("Todas");
-  const [cart, setCart] = useState([]);
+  const [cart, setCart] = useState(() => {
+    try {
+      const saved = localStorage.getItem("mi-pos-cart");
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  });
   const [kgModal, setKgModal] = useState(null);
   const [payModal, setPayModal] = useState(false);
   const [successModal, setSuccessModal] = useState(null);
@@ -1222,6 +1227,14 @@ function SaleView({ products, userProfile, categories }) {
   const handleProductClickRef = useRef(null);   // assigned after function is defined
   const handleNotFoundRef     = useRef(null);   // assigned after function is defined
   useEffect(() => { barcodeProductsRef.current = products; }, [products]);
+
+  // Persiste el carrito en localStorage para que sobreviva la navegación entre secciones
+  useEffect(() => {
+    try {
+      if (cart.length === 0) localStorage.removeItem("mi-pos-cart");
+      else localStorage.setItem("mi-pos-cart", JSON.stringify(cart));
+    } catch { /* storage lleno o modo privado — ignorar */ }
+  }, [cart]);
 
   // ── HID Bluetooth / USB barcode scanner (behaves like a keyboard) ──────────
   // Strategy: scanners send chars < 50 ms apart and finish with Enter.
