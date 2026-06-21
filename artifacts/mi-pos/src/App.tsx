@@ -116,6 +116,18 @@ const css = `
   .docs-err-banner { background: #2d1010; border: 1px solid #f87171; border-radius: 10px; padding: 10px 14px; color: #f87171; font-size: 12px; margin-bottom: 10px; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .spin { display: inline-block; animation: spin 0.8s linear infinite; }
+  /* ─── Print modal ─── */
+  .print-section { background: #1e2438; border: 1px solid #2a3045; border-radius: 10px; padding: 14px; margin-bottom: 10px; }
+  .print-section-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+  .print-section-icon { font-size: 22px; flex-shrink: 0; line-height: 1; }
+  .print-section-title { font-size: 13px; font-weight: 600; color: #e8eaf0; line-height: 1.3; }
+  .print-section-sub { font-size: 11px; color: #6b7280; }
+  .print-ok { color: #00c896; font-size: 12px; margin-top: 6px; }
+  .print-err { color: #f87171; font-size: 11px; margin-top: 6px; line-height: 1.5; }
+  /* ─── Settings ─── */
+  .settings-area { padding: 16px; overflow-y: auto; flex: 1; }
+  .settings-section { background: #1e2438; border: 1px solid #2a3045; border-radius: 12px; padding: 16px; margin-bottom: 14px; }
+  .settings-section-title { font-size: 13px; font-weight: 700; color: #e8eaf0; margin-bottom: 14px; }
   .main { flex: 1; overflow: hidden; display: flex; flex-direction: column; padding-bottom: 60px; }
   .content { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
   @media (min-width: 700px) {
@@ -1218,8 +1230,302 @@ function AIChat({ products, sales, userProfile }) {
   );
 }
 
+// ─── ESC/POS ticket builder ───────────────────────────────────────────────────
+function buildEscPos(sale, bizName = "MI POS") {
+  const buf = [];
+  const push = (...xs) => xs.forEach(x => Array.isArray(x) ? buf.push(...x) : buf.push(x));
+  const lf = () => buf.push(0x0A);
+  const ascii = (s = "") => s
+    .replace(/[áàäâ]/g, "a").replace(/[ÁÀÄÂ]/g, "A")
+    .replace(/[éèëê]/g, "e").replace(/[ÉÈËÊ]/g, "E")
+    .replace(/[íìïî]/g, "i").replace(/[ÍÌÏÎ]/g, "I")
+    .replace(/[óòöô]/g, "o").replace(/[ÓÒÖÔ]/g, "O")
+    .replace(/[úùüû]/g, "u").replace(/[ÚÙÜÛ]/g, "U")
+    .replace(/ñ/g, "n").replace(/Ñ/g, "N")
+    .replace(/[^\x00-\x7F]/g, "?");
+  const str = (s) => [...ascii(s)].forEach(c => buf.push(c.charCodeAt(0)));
+  const line = (s) => { str(s); lf(); };
+  const fmtP = (n) => "$" + (n || 0).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const now = new Date();
+  const SEP = "--------------------------------"; // 32 chars
+  const W = 32;
+  const padR = (s, n) => String(s).substring(0, n).padEnd(n, " ");
+  const padL = (s, n) => String(s).padStart(n, " ");
+
+  push(0x1B, 0x40);                    // ESC @ — init
+  push(0x1B, 0x61, 0x01);             // center
+  push(0x1D, 0x21, 0x01);             // 2× height
+  push(0x1B, 0x45, 0x01);             // bold on
+  str(bizName.toUpperCase().substring(0, W)); lf();
+  push(0x1D, 0x21, 0x00);             // normal size
+  push(0x1B, 0x45, 0x00);             // bold off
+  push(0x1B, 0x61, 0x00);             // left
+
+  line(SEP);
+  line("Fecha: " + now.toLocaleDateString("es-AR") + " " + now.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }));
+  line("Folio: " + (sale.id?.slice(-8) || "--------").toUpperCase());
+  line(SEP);
+
+  (sale.items || []).forEach(item => {
+    line(padR(ascii(item.name || ""), W));
+    const qtyS = item.qty + "x @ " + fmtP(item.price);
+    const totS = fmtP((item.price || 0) * (item.qty || 1));
+    line(padR(qtyS, W - totS.length) + totS);
+  });
+
+  line(SEP);
+  push(0x1B, 0x61, 0x02);             // right
+  push(0x1B, 0x45, 0x01);             // bold
+  push(0x1D, 0x21, 0x01);             // 2× height
+  str("TOTAL: " + fmtP(sale.total)); lf();
+  push(0x1D, 0x21, 0x00); push(0x1B, 0x45, 0x00); push(0x1B, 0x61, 0x00);
+
+  line(SEP);
+  line("Metodo: " + ascii(sale.method || ""));
+  if (sale.method === "Efectivo") {
+    line("Recibido: " + fmtP(sale.received));
+    line("Vuelto:   " + fmtP(Math.max(0, sale.change || 0)));
+  }
+  line(SEP);
+  push(0x1B, 0x61, 0x01);
+  line("Gracias por su compra!");
+  push(0x1B, 0x61, 0x00);
+  lf(); lf(); lf();
+  push(0x1D, 0x56, 0x41, 0x00);      // GS V — cut
+  return new Uint8Array(buf);
+}
+
+// Canvas ticket for PNG download fallback
+function renderTicketCanvas(sale, bizName = "MI POS") {
+  const W = 380, PAD = 18, LH = 20;
+  const FONT = "13px 'Courier New', monospace";
+  const fmtP = (n) => "$" + (n || 0).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const now = new Date();
+
+  const lines = [];
+  const sep = () => lines.push({ t: "sep" });
+  const txt = (s, bold = false, align = "left") => lines.push({ t: "txt", s, bold, align });
+  const big = (s) => lines.push({ t: "big", s });
+
+  big(bizName.toUpperCase());
+  sep();
+  txt("Fecha: " + now.toLocaleDateString("es-AR") + "  " + now.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }));
+  txt("Folio: " + (sale.id?.slice(-8) || "--------").toUpperCase());
+  sep();
+  (sale.items || []).forEach(item => {
+    txt(item.name);
+    txt(`${item.qty}x  ${fmtP((item.price || 0) * (item.qty || 1))}`, false, "right");
+  });
+  sep();
+  txt("TOTAL: " + fmtP(sale.total), true, "right");
+  sep();
+  txt("Método: " + (sale.method || ""));
+  if (sale.method === "Efectivo") {
+    txt("Recibido: " + fmtP(sale.received));
+    txt("Vuelto:   " + fmtP(Math.max(0, sale.change || 0)));
+  }
+  sep();
+  txt("¡Gracias por su compra!", false, "center");
+  txt("");
+
+  let H = PAD * 2;
+  lines.forEach(l => { H += l.t === "big" ? 34 : l.t === "sep" ? 14 : LH; });
+
+  const canvas = document.createElement("canvas");
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = "#000000";
+
+  let y = PAD;
+  for (const l of lines) {
+    if (l.t === "sep") {
+      ctx.fillStyle = "#cccccc"; ctx.fillRect(PAD, y + 6, W - PAD * 2, 1); ctx.fillStyle = "#000"; y += 14;
+    } else if (l.t === "big") {
+      ctx.font = "bold 20px 'Courier New', monospace"; ctx.textAlign = "center";
+      ctx.fillText(l.s, W / 2, y + 22); y += 34;
+    } else {
+      ctx.font = l.bold ? "bold " + FONT : FONT;
+      ctx.textAlign = l.align === "center" ? "center" : l.align === "right" ? "right" : "left";
+      ctx.fillText(l.s, l.align === "center" ? W / 2 : l.align === "right" ? W - PAD : PAD, y + 14);
+      y += LH;
+    }
+  }
+  return canvas;
+}
+
+// ─── PrintOptionsModal ────────────────────────────────────────────────────────
+function PrintOptionsModal({ sale, bizName, onClose }) {
+  const printerIp = localStorage.getItem("mi-pos-printer-ip") || "http://10.0.0.100:3000";
+  const [wifiSt, setWifiSt]   = useState("idle");   // idle|connecting|printing|ok|error
+  const [wifiErr, setWifiErr] = useState("");
+  const [btSt, setBtSt]       = useState("idle");   // idle|scanning|connecting|sending|ok|error
+  const [btErr, setBtErr]     = useState("");
+  const ticket = useMemo(() => buildEscPos(sale, bizName), [sale, bizName]);
+
+  const tryWifi = async () => {
+    if (["connecting","printing","ok"].includes(wifiSt)) return;
+    setWifiSt("connecting"); setWifiErr("");
+    try {
+      const b64 = btoa(ticket.reduce((s, b) => s + String.fromCharCode(b), ""));
+      setWifiSt("printing");
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 10000);
+      try {
+        const res = await fetch(`${printerIp}/imprimir`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ticket: b64 }), signal: ctrl.signal,
+        });
+        clearTimeout(t);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      } catch (e) { clearTimeout(t); throw e; }
+      setWifiSt("ok");
+    } catch (err) {
+      setWifiSt("error");
+      if (err.name === "AbortError")
+        setWifiErr("Sin respuesta (10 s). Verificá que la impresora esté encendida y en la misma red WiFi.");
+      else if (err.message?.includes("fetch") || err.message?.includes("network") || err.message?.includes("Failed"))
+        setWifiErr(`No se pudo conectar a ${printerIp}. Cambiá la IP en Ajustes.`);
+      else
+        setWifiErr(err.message || "Error desconocido");
+    }
+  };
+
+  const tryBluetooth = async () => {
+    if (["scanning","connecting","sending","ok"].includes(btSt)) return;
+    setBtSt("scanning"); setBtErr("");
+    try {
+      if (!navigator.bluetooth)
+        throw new Error("Web Bluetooth no disponible. Usá Chrome en Android o Desktop.");
+      const device = await navigator.bluetooth.requestDevice({
+        acceptAllDevices: true,
+        optionalServices: [
+          "000018f0-0000-1000-8000-00805f9b34fb",
+          "e7810a71-73ae-499d-8c15-faa9aef0c3f2",
+        ],
+      });
+      setBtSt("connecting");
+      const server = await device.gatt.connect();
+      const SERVICE_UUIDS = ["000018f0-0000-1000-8000-00805f9b34fb","e7810a71-73ae-499d-8c15-faa9aef0c3f2"];
+      const CHAR_UUIDS    = ["00002af1-0000-1000-8000-00805f9b34fb","bef8d6c9-9c21-4c9e-b632-bd58c1009f9f"];
+      let svc = null, chr = null;
+      for (const u of SERVICE_UUIDS) { try { svc = await server.getPrimaryService(u); break; } catch {} }
+      if (!svc) { const all = await server.getPrimaryServices(); svc = all[0]; }
+      if (!svc) throw new Error("No se encontró el servicio de impresión. Asegurate de que sea una impresora térmica BT.");
+      for (const u of CHAR_UUIDS) { try { chr = await svc.getCharacteristic(u); break; } catch {} }
+      if (!chr) {
+        const all = await svc.getCharacteristics();
+        chr = all.find(c => c.properties.writeWithoutResponse || c.properties.write) || all[0];
+      }
+      if (!chr) throw new Error("No se encontró la característica de escritura.");
+      setBtSt("sending");
+      const CHUNK = 512;
+      for (let i = 0; i < ticket.length; i += CHUNK) {
+        const chunk = ticket.slice(i, Math.min(i + CHUNK, ticket.length));
+        if (chr.properties.writeWithoutResponse) await chr.writeValueWithoutResponse(chunk);
+        else await chr.writeValue(chunk);
+        await new Promise(r => setTimeout(r, 50));
+      }
+      setBtSt("ok");
+    } catch (err) {
+      if (err.name === "NotFoundError" || err.message?.includes("cancelled") || err.message?.includes("cancel")) {
+        setBtSt("idle"); return;
+      }
+      setBtSt("error"); setBtErr(err.message || "Error de Bluetooth");
+    }
+  };
+
+  const downloadTicket = () => {
+    const canvas = renderTicketCanvas(sale, bizName);
+    canvas.toBlob(blob => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `ticket-${sale.id?.slice(-8) || "ticket"}.png`; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }, "image/png");
+  };
+
+  const wifiBusy = ["connecting","printing"].includes(wifiSt);
+  const btBusy   = ["scanning","connecting","sending"].includes(btSt);
+  const anyOk    = wifiSt === "ok" || btSt === "ok";
+  const showDl   = wifiSt === "error" || btSt === "error" || anyOk;
+
+  const stIcon = (st) =>
+    st === "ok" ? "✅" : (["connecting","printing","scanning","sending"].includes(st) ? <span className="spin">⏳</span> : st === "error" ? "❌" : null);
+
+  return (
+    <div className="modal-overlay">
+      <div className="modal" style={{ maxWidth: 360 }}>
+        <h2>🖨️ Imprimir ticket</h2>
+
+        {/* WiFi */}
+        <div className="print-section">
+          <div className="print-section-head">
+            <span className="print-section-icon">🌐</span>
+            <div style={{ flex: 1 }}>
+              <div className="print-section-title">WiFi</div>
+              <div className="print-section-sub">{printerIp}</div>
+            </div>
+            <span style={{ fontSize: 18 }}>{stIcon(wifiSt)}</span>
+          </div>
+          {wifiSt === "ok"    && <div className="print-ok">✅ Imprimido correctamente</div>}
+          {wifiSt === "error" && <div className="print-err">{wifiErr}</div>}
+          {wifiSt !== "ok" && (
+            <button className="btn-primary" style={{ width: "100%", marginTop: 8, opacity: wifiBusy ? 0.6 : 1 }}
+              onClick={tryWifi} disabled={wifiBusy}>
+              {wifiSt === "connecting" ? "Conectando..." : wifiSt === "printing" ? "Imprimiendo..." : "🖨️ Imprimir por WiFi"}
+            </button>
+          )}
+        </div>
+
+        {/* Bluetooth */}
+        <div className="print-section">
+          <div className="print-section-head">
+            <span className="print-section-icon">📡</span>
+            <div style={{ flex: 1 }}>
+              <div className="print-section-title">Bluetooth</div>
+              <div className="print-section-sub">Impresoras térmicas pareadas</div>
+            </div>
+            <span style={{ fontSize: 18 }}>{stIcon(btSt)}</span>
+          </div>
+          {btSt === "ok"    && <div className="print-ok">✅ Imprimido correctamente</div>}
+          {btSt === "error" && <div className="print-err">{btErr}</div>}
+          {btSt !== "ok" && (
+            <button className="btn-secondary" style={{ width: "100%", marginTop: 8, opacity: btBusy ? 0.6 : 1 }}
+              onClick={tryBluetooth} disabled={btBusy}>
+              {btSt === "scanning" ? "Buscando..." : btSt === "connecting" ? "Conectando..." : btSt === "sending" ? "Enviando..." : "📡 Imprimir por Bluetooth"}
+            </button>
+          )}
+        </div>
+
+        {/* Fallback download */}
+        {showDl && (
+          <div className="print-section">
+            <div className="print-section-head">
+              <span className="print-section-icon">⬇️</span>
+              <div>
+                <div className="print-section-title">Sin impresora</div>
+                <div className="print-section-sub">Descargá el ticket como imagen PNG</div>
+              </div>
+            </div>
+            <button className="btn-secondary" style={{ width: "100%", marginTop: 8 }} onClick={downloadTicket}>
+              ⬇️ Descargar ticket (.png)
+            </button>
+          </div>
+        )}
+
+        <button className="btn-secondary" style={{ width: "100%", marginTop: 4 }} onClick={onClose}>
+          {anyOk ? "Cerrar" : "Omitir impresión"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── SuccessModal ──────────────────────────────────────────────────────────────
-function SuccessModal({ sale, onClose }) {
+function SuccessModal({ sale, bizName, onClose }) {
+  const [printing, setPrinting] = useState(false);
+  if (printing) return <PrintOptionsModal sale={sale} bizName={bizName} onClose={onClose} />;
   return (
     <div className="modal-overlay">
       <div className="modal" style={{ textAlign: "center" }}>
@@ -1231,14 +1537,15 @@ function SuccessModal({ sale, onClose }) {
           {sale.method === "Efectivo" && <><div className="success-row"><span>Recibido</span><span>{fmt(sale.received)}</span></div><div className="success-row"><span>Vuelto</span><span>{fmt(Math.max(0, sale.change))}</span></div></>}
           <div className="success-row"><span>Total</span><span>{fmt(sale.total)}</span></div>
         </div>
-        <button className="btn-primary" onClick={onClose} style={{ width: "100%", marginTop: 16 }}>Nueva venta</button>
+        <button className="btn-secondary" onClick={() => setPrinting(true)} style={{ width: "100%", marginTop: 14 }}>🖨️ Imprimir ticket</button>
+        <button className="btn-primary" onClick={onClose} style={{ width: "100%", marginTop: 8 }}>Nueva venta</button>
       </div>
     </div>
   );
 }
 
 // ─── SaleView ─────────────────────────────────────────────────────────────────
-function SaleView({ products, userProfile, categories }) {
+function SaleView({ products, userProfile, categories, localName }) {
   const [search, setSearch] = useState("");
   const [cat, setCat] = useState("Todas");
   const [cart, setCart] = useState(() => {
@@ -1440,7 +1747,7 @@ function SaleView({ products, userProfile, categories }) {
       )}
       {kgModal && <KgModal product={kgModal} onConfirm={kg => { addToCart(kgModal, kg); setKgModal(null); }} onClose={() => setKgModal(null)} />}
       {payModal && <PayModal total={total} onConfirm={handlePay} onClose={() => setPayModal(false)} />}
-      {successModal && <SuccessModal sale={successModal} onClose={() => setSuccessModal(null)} />}
+      {successModal && <SuccessModal sale={successModal} bizName={localName} onClose={() => setSuccessModal(null)} />}
       <div className="products-area">
         <div className="search-row">
           {/* Hidden input whose sole purpose is receiving focus to summon the virtual keyboard.
@@ -2671,6 +2978,129 @@ function PermissionsView() {
   );
 }
 
+// ─── SettingsView ────────────────────────────────────────────────────────────
+function SettingsView() {
+  const [printerIp, setPrinterIp] = useState(
+    () => localStorage.getItem("mi-pos-printer-ip") || "http://10.0.0.100:3000"
+  );
+  const [testSt, setTestSt]   = useState("idle"); // idle|testing|ok|error
+  const [testMsg, setTestMsg] = useState("");
+
+  const saveIp = (v) => { setPrinterIp(v); localStorage.setItem("mi-pos-printer-ip", v); };
+
+  const testPrinter = async () => {
+    setTestSt("testing"); setTestMsg("");
+    const ctrl = new AbortController();
+    const timeout = setTimeout(() => ctrl.abort(), 5000);
+    try {
+      const res = await fetch(printerIp + "/ping", { method: "GET", signal: ctrl.signal }).catch(() => null);
+      clearTimeout(timeout);
+      if (res) {
+        setTestSt("ok");
+        setTestMsg(res.ok ? "Servidor alcanzable y respondiendo." : `Servidor responde (HTTP ${res.status}).`);
+      } else {
+        throw new Error("Sin respuesta");
+      }
+    } catch (err) {
+      clearTimeout(timeout);
+      setTestSt("error");
+      if (err.name === "AbortError")
+        setTestMsg("Sin respuesta en 5 s. Verificá la IP y que estés en la misma red WiFi.");
+      else
+        setTestMsg(`No se pudo conectar a ${printerIp}.`);
+    }
+  };
+
+  const sendTestTicket = async () => {
+    setTestSt("testing"); setTestMsg("");
+    try {
+      const fakeSale = {
+        id: "TEST0001", total: 1000, method: "Efectivo", received: 1000, change: 0,
+        items: [{ name: "Producto prueba", qty: 1, price: 1000 }],
+      };
+      const ticket = buildEscPos(fakeSale, "IMPRESORA TEST");
+      const b64 = btoa(ticket.reduce((s, b) => s + String.fromCharCode(b), ""));
+      const ctrl = new AbortController();
+      const timeout = setTimeout(() => ctrl.abort(), 8000);
+      const res = await fetch(`${printerIp}/imprimir`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ticket: b64 }), signal: ctrl.signal,
+      });
+      clearTimeout(timeout);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setTestSt("ok"); setTestMsg("Ticket de prueba enviado correctamente.");
+    } catch (err) {
+      setTestSt("error");
+      if (err.name === "AbortError")
+        setTestMsg("Sin respuesta (8 s). Verificá que la impresora esté encendida.");
+      else if (err.message?.includes("fetch") || err.message?.includes("Failed"))
+        setTestMsg(`No se pudo conectar a ${printerIp}.`);
+      else
+        setTestMsg(err.message || "Error desconocido");
+    }
+  };
+
+  return (
+    <div className="content" style={{ overflowY: "auto" }}>
+      <div className="settings-area">
+        <div className="settings-section">
+          <div className="settings-section-title">🖨️ Impresora</div>
+
+          <div className="modal-section">
+            <div className="modal-label">IP del servidor de impresión</div>
+            <input className="modal-input" value={printerIp}
+              onChange={e => saveIp(e.target.value)}
+              placeholder="http://10.0.0.100:3000" />
+            <div style={{ fontSize: 11, color: "#6b7280", marginTop: 5, lineHeight: 1.5 }}>
+              El servidor debe aceptar{" "}
+              <code style={{ background: "#252b3b", padding: "1px 5px", borderRadius: 3 }}>POST /imprimir</code>{" "}
+              con el cuerpo <code style={{ background: "#252b3b", padding: "1px 5px", borderRadius: 3 }}>{`{"ticket":"<base64>"}`}</code>.
+              El ticket es ESC/POS estándar codificado en base64.
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+            <button
+              className="btn-secondary"
+              style={{ flex: 1, opacity: testSt === "testing" ? 0.6 : 1 }}
+              onClick={testPrinter}
+              disabled={testSt === "testing"}>
+              {testSt === "testing" ? "Probando..." : "🔌 Probar conexión"}
+            </button>
+            <button
+              className="btn-secondary"
+              style={{ flex: 1, opacity: testSt === "testing" ? 0.6 : 1 }}
+              onClick={sendTestTicket}
+              disabled={testSt === "testing"}>
+              🖨️ Imprimir prueba
+            </button>
+          </div>
+
+          {testSt === "ok" && (
+            <div style={{ color: "#00c896", fontSize: 13, marginTop: 10 }}>✅ {testMsg}</div>
+          )}
+          {testSt === "error" && (
+            <div style={{ color: "#f87171", fontSize: 12, marginTop: 10, lineHeight: 1.5 }}>❌ {testMsg}</div>
+          )}
+        </div>
+
+        <div className="settings-section">
+          <div className="settings-section-title">ℹ️ Sobre el servidor WiFi</div>
+          <div style={{ fontSize: 12, color: "#9ca3af", lineHeight: 1.7 }}>
+            Para imprimir por WiFi necesitás un servidor en la misma red que reciba los tickets
+            y los envíe a la impresora ESC/POS.<br /><br />
+            <strong style={{ color: "#e8eaf0" }}>Opción más simple:</strong> conectá una Raspberry Pi
+            o PC a la impresora por USB y corré un servidor Node.js con la ruta{" "}
+            <code style={{ background: "#252b3b", padding: "1px 5px", borderRadius: 3 }}>POST /imprimir</code>.<br /><br />
+            <strong style={{ color: "#e8eaf0" }}>Bluetooth:</strong> no requiere servidor — imprime
+            directo desde el navegador (solo Chrome Android/Desktop).
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── APP ROOT ─────────────────────────────────────────────────────────────────
 // ─── DocsView ─────────────────────────────────────────────────────────────────
 const DOC_TYPES = ["Boleta", "Remito", "Recibo", "Otro"];
@@ -3146,12 +3576,13 @@ export default function App() {
   ].filter(n => n.show);
 
   const moreItems = [
-    { id: "reports", icon: "📊", label: "Reportes",     show: perms.viewReports || isOwner },
-    { id: "ai",      icon: "🤖", label: "Asistente IA", show: canUseAI },
-    { id: "docs",    icon: "📄", label: "Documentos",   show: true },
+    { id: "reports",  icon: "📊", label: "Reportes",     show: perms.viewReports || isOwner },
+    { id: "ai",       icon: "🤖", label: "Asistente IA", show: canUseAI },
+    { id: "docs",     icon: "📄", label: "Documentos",   show: true },
+    { id: "settings", icon: "⚙️", label: "Ajustes",      show: isOwner },
   ].filter(n => n.show);
 
-  const titles = { sale: "Mi POS 2", inventory: "Inventario", history: "Historial", reports: "Reportes", perms: "Mi Equipo", ai: "Asistente IA", docs: "Documentos" };
+  const titles = { sale: "Mi POS 2", inventory: "Inventario", history: "Historial", reports: "Reportes", perms: "Mi Equipo", ai: "Asistente IA", docs: "Documentos", settings: "Ajustes" };
 
   const goTo = (id) => { setView(id); setMoreOpen(false); };
 
@@ -3190,13 +3621,14 @@ export default function App() {
           <button className="logout-btn" onClick={() => signOut(auth)}>Salir</button>
         </div>
         <div className="main">
-          {view === "sale"      && <SaleView products={products} userProfile={userProfile} categories={categories} />}
+          {view === "sale"      && <SaleView products={products} userProfile={userProfile} categories={categories} localName={activeLocalName} />}
           {view === "inventory" && <InventoryView products={products} userProfile={userProfile} categories={categories} />}
           {view === "history"   && <HistoryView sales={sales} />}
           {view === "reports"   && <ReportsView sales={sales} products={products} />}
           {view === "perms"     && <PermissionsView />}
           {view === "ai" && canUseAI && <AIChat products={products} sales={sales} userProfile={userProfile} />}
           {view === "docs"      && <DocsView userProfile={userProfile} />}
+          {view === "settings"  && <SettingsView />}
         </div>
 
         {/* ── Modal "Más" ────────────────────────────────────────────── */}
@@ -3223,7 +3655,7 @@ export default function App() {
               <span className="bn-icon">{n.icon}</span>{n.label}
             </button>
           ))}
-          <button className={`bn-btn${moreOpen || ["reports","ai","docs"].includes(view) ? " active" : ""}`} onClick={() => setMoreOpen(o => !o)}>
+          <button className={`bn-btn${moreOpen || ["reports","ai","docs","settings"].includes(view) ? " active" : ""}`} onClick={() => setMoreOpen(o => !o)}>
             <span className="bn-icon">⋯</span>Más
           </button>
         </nav>
