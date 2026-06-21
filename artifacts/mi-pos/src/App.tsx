@@ -480,7 +480,7 @@ function ScannerModal({ products, onFound, onNotFound, onClose }) {
       html5QrRef.current = scanner;
 
       await scanner.start(
-        { facingMode: { ideal: "environment" } },
+        { facingMode: "environment" },
         { fps: 10, qrbox: { width: 250, height: 120 } },
         (code) => handleCode(code),
         () => {} // per-frame decode error — expected for non-barcode frames
