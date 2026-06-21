@@ -1241,71 +1241,84 @@ function AIChat({ products, sales, userProfile }) {
 
 // ─── ESC/POS ticket builder ───────────────────────────────────────────────────
 function buildEscPos(sale, bizName = "MI POS") {
-  const buf = [];
-  const push = (...xs) => xs.forEach(x => Array.isArray(x) ? buf.push(...x) : buf.push(x));
-  const lf = () => buf.push(0x0A);
+  const ESC = 0x1B;
+  const GS  = 0x1D;
+  const LF  = 0x0A;
 
-  // ASCII puro: transliteración de acentos y caracteres especiales
-  const toAscii = (s = "") => String(s)
-    .replace(/[áàäâã]/g, "a").replace(/[ÁÀÄÂÃ]/g, "A")
-    .replace(/[éèëê]/g,  "e").replace(/[ÉÈËÊ]/g,  "E")
-    .replace(/[íìïî]/g,  "i").replace(/[ÍÌÏÎ]/g,  "I")
-    .replace(/[óòöôõ]/g, "o").replace(/[ÓÒÖÔÕ]/g, "O")
-    .replace(/[úùüû]/g,  "u").replace(/[ÚÙÜÛ]/g,  "U")
-    .replace(/ñ/g, "n").replace(/Ñ/g, "N")
-    .replace(/ç/g, "c").replace(/Ç/g, "C")
-    .replace(/[^\x00-\x7F]/g, "?");
-  // Convierte string a bytes ASCII y los empuja al buffer
-  const str  = (s) => { for (const c of toAscii(s)) buf.push(c.charCodeAt(0)); };
-  const line = (s) => { str(s); lf(); };
-  const fmtP = (n) => "$" + (n || 0).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const now = new Date();
-  const SEP = "--------------------------------"; // 32 chars
-  const W = 32;
-  const padR = (s, n) => String(s).substring(0, n).padEnd(n, " ");
-  const padL = (s, n) => String(s).padStart(n, " ");
+  const bytes = [];
 
-  push(0x1B, 0x40);                    // ESC @ — init
-  push(0x1B, 0x61, 0x01);             // center
-  push(0x1D, 0x21, 0x01);             // 2× height
-  push(0x1B, 0x45, 0x01);             // bold on
-  str(bizName.toUpperCase().substring(0, W)); lf();
-  push(0x1D, 0x21, 0x00);             // normal size
-  push(0x1B, 0x45, 0x00);             // bold off
-  push(0x1B, 0x61, 0x00);             // left
+  // Inicializar impresora
+  bytes.push(ESC, 0x40);
 
-  line(SEP);
-  line("Fecha: " + now.toLocaleDateString("es-AR") + " " + now.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }));
-  line("Folio: " + (sale.id?.slice(-8) || "--------").toUpperCase());
-  line(SEP);
+  // Función para agregar texto ASCII puro seguido de LF
+  function texto(str) {
+    const limpio = String(str)
+      .replace(/[áàä]/gi, "a")
+      .replace(/[éèë]/gi, "e")
+      .replace(/[íìï]/gi, "i")
+      .replace(/[óòö]/gi, "o")
+      .replace(/[úùü]/gi, "u")
+      .replace(/ñ/gi, "n")
+      .replace(/[^\x20-\x7E]/g, "?");
+    for (let i = 0; i < limpio.length; i++) {
+      bytes.push(limpio.charCodeAt(i));
+    }
+    bytes.push(LF);
+  }
+
+  const fmtP  = (n) => "$" + (n || 0).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const SEP   = "--------------------------------";
+  const W     = 32;
+  const padR  = (s, n) => String(s).substring(0, n).padEnd(n, " ");
+  const now   = new Date();
+
+  // Encabezado: nombre del local centrado
+  bytes.push(ESC, 0x61, 0x01);        // centrar
+  bytes.push(GS,  0x21, 0x01);        // 2x altura
+  bytes.push(ESC, 0x45, 0x01);        // bold on
+  texto(String(bizName).toUpperCase().substring(0, W));
+  bytes.push(GS,  0x21, 0x00);        // tamaño normal
+  bytes.push(ESC, 0x45, 0x00);        // bold off
+  bytes.push(ESC, 0x61, 0x00);        // alinear izquierda
+
+  texto(SEP);
+  texto("Fecha: " + now.toLocaleDateString("es-AR") + " " + now.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }));
+  texto("Folio: " + (String(sale.id || "").slice(-8) || "--------").toUpperCase());
+  texto(SEP);
 
   (sale.items || []).forEach(item => {
-    line(padR(item.name || "", W));
+    texto(padR(item.name || "", W));
     const qtyS = item.qty + "x @ " + fmtP(item.price);
     const totS = fmtP((item.price || 0) * (item.qty || 1));
-    line(padR(qtyS, W - totS.length) + totS);
+    texto(padR(qtyS, W - totS.length) + totS);
   });
 
-  line(SEP);
-  push(0x1B, 0x61, 0x02);             // right
-  push(0x1B, 0x45, 0x01);             // bold
-  push(0x1D, 0x21, 0x01);             // 2× height
-  str("TOTAL: " + fmtP(sale.total)); lf();
-  push(0x1D, 0x21, 0x00); push(0x1B, 0x45, 0x00); push(0x1B, 0x61, 0x00);
+  texto(SEP);
+  bytes.push(ESC, 0x61, 0x02);        // alinear derecha
+  bytes.push(ESC, 0x45, 0x01);        // bold on
+  bytes.push(GS,  0x21, 0x01);        // 2x altura
+  texto("TOTAL: " + fmtP(sale.total));
+  bytes.push(GS,  0x21, 0x00);
+  bytes.push(ESC, 0x45, 0x00);
+  bytes.push(ESC, 0x61, 0x00);        // izquierda
 
-  line(SEP);
-  line("Metodo: " + (sale.method || ""));
+  texto(SEP);
+  texto("Metodo: " + (sale.method || ""));
   if (sale.method === "Efectivo") {
-    line("Recibido: " + fmtP(sale.received));
-    line("Vuelto:   " + fmtP(Math.max(0, sale.change || 0)));
+    texto("Recibido: " + fmtP(sale.received));
+    texto("Vuelto:   " + fmtP(Math.max(0, sale.change || 0)));
   }
-  line(SEP);
-  push(0x1B, 0x61, 0x01);
-  line("Gracias por su compra!");
-  push(0x1B, 0x61, 0x00);
-  lf(); lf(); lf();
-  push(0x1D, 0x56, 0x41, 0x00);      // GS V — cut
-  return new Uint8Array(buf);
+  texto(SEP);
+  bytes.push(ESC, 0x61, 0x01);        // centrar
+  texto("Gracias por su compra!");
+  bytes.push(ESC, 0x61, 0x00);
+  bytes.push(LF, LF, LF);
+
+  // Corte automático
+  bytes.push(GS, 0x56, 0x41, 0x00);
+
+  // Devuelve base64 directamente
+  return btoa(String.fromCharCode(...bytes));
 }
 
 // Canvas ticket for PNG download fallback
@@ -1376,7 +1389,8 @@ function PrintOptionsModal({ sale, bizName, userProfile, onClose }) {
   const [wifiErr, setWifiErr] = useState("");
   const [btSt, setBtSt]       = useState("idle");
   const [btErr, setBtErr]     = useState("");
-  const ticket = useMemo(() => buildEscPos(sale, bizName), [sale, bizName]);
+  // buildEscPos devuelve base64 directamente
+  const ticketB64 = useMemo(() => buildEscPos(sale, bizName), [sale, bizName]);
 
   useEffect(() => {
     if (!uid) return;
@@ -1403,7 +1417,7 @@ function PrintOptionsModal({ sale, bizName, userProfile, onClose }) {
     if (["connecting","printing","ok"].includes(wifiSt)) return;
     setWifiSt("connecting"); setWifiErr("");
     try {
-      const b64 = btoa(ticket.reduce((s, b) => s + String.fromCharCode(b), ""));
+      const b64 = ticketB64;
       setWifiSt("printing");
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), 10000);
@@ -1455,9 +1469,10 @@ function PrintOptionsModal({ sale, bizName, userProfile, onClose }) {
       }
       if (!chr) throw new Error("No se encontró la característica de escritura.");
       setBtSt("sending");
+      const btBytes = Uint8Array.from(atob(ticketB64), c => c.charCodeAt(0));
       const CHUNK = 512;
-      for (let i = 0; i < ticket.length; i += CHUNK) {
-        const chunk = ticket.slice(i, Math.min(i + CHUNK, ticket.length));
+      for (let i = 0; i < btBytes.length; i += CHUNK) {
+        const chunk = btBytes.slice(i, Math.min(i + CHUNK, btBytes.length));
         if (chr.properties.writeWithoutResponse) await chr.writeValueWithoutResponse(chunk);
         else await chr.writeValue(chunk);
         await new Promise(r => setTimeout(r, 50));
@@ -3067,8 +3082,7 @@ function LocationCard({ loc, onChange, onDelete }) {
 
   const testPrint = () => runFetch(async () => {
     const fake = { id: "TEST0001", total: 1000, method: "Efectivo", received: 1000, change: 0, items: [{ name: "Producto prueba", qty: 1, price: 1000 }] };
-    const ticket = buildEscPos(fake, name.toUpperCase());
-    const b64 = btoa(ticket.reduce((s, b) => s + String.fromCharCode(b), ""));
+    const b64 = buildEscPos(fake, name.toUpperCase());
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 8000);
     const res = await fetch(`${ip}/imprimir`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ticket: b64 }), signal: ctrl.signal });
