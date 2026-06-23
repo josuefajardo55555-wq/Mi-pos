@@ -1430,28 +1430,30 @@ function PrintOptionsModal({ sale, bizName, userProfile, onClose }) {
     if (["connecting","printing","ok"].includes(wifiSt)) return;
     setWifiSt("connecting"); setWifiErr("");
     try {
-      const b64 = ticketB64;
       // Log diagnóstico: primeros bytes deben ser 1B 40
       console.log("[ESC/POS] hex bytes 0-20:", hexDiag);
-      console.log("[ESC/POS] base64 length:", b64.length, "| primeros 40 chars:", b64.slice(0, 40));
+      console.log("[ESC/POS] base64 length:", ticketB64.length, "| primeros 40 chars:", ticketB64.slice(0, 40));
       setWifiSt("printing");
       const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 10000);
+      const t = setTimeout(() => ctrl.abort(), 15000);
       try {
-        const res = await fetch(`${printerIp}/imprimir`, {
+        // Proxy HTTPS en Replit → evita Mixed Content (APK HTTPS → HTTP local)
+        const res = await fetch("/api/imprimir", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ticket: b64 }), signal: ctrl.signal,
+          body: JSON.stringify({ ticket: ticketB64, ip: printerIp }),
+          signal: ctrl.signal,
         });
         clearTimeout(t);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.error || `HTTP ${res.status}`);
+        }
       } catch (e) { clearTimeout(t); throw e; }
       setWifiSt("ok");
     } catch (err) {
       setWifiSt("error");
       if (err.name === "AbortError")
-        setWifiErr("Sin respuesta (10 s). Verificá que la impresora esté encendida y en la misma red WiFi.");
-      else if (err.message?.includes("fetch") || err.message?.includes("network") || err.message?.includes("Failed"))
-        setWifiErr(`No se pudo conectar a ${printerIp}. Cambiá la IP en Ajustes.`);
+        setWifiErr("Sin respuesta (15 s). Verificá que la impresora esté encendida y en la misma red WiFi.");
       else
         setWifiErr(err.message || "Error desconocido");
     }
