@@ -1435,17 +1435,13 @@ function PrintOptionsModal({ sale, bizName, userProfile, onClose }) {
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), 15000);
       try {
-        // Proxy HTTPS en Replit → evita Mixed Content (APK HTTPS → HTTP local)
-        const res = await fetch("/api/imprimir", {
+        const res = await fetch(`${printerIp}/imprimir`, {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ticket: ticketB64, ip: printerIp }),
+          body: JSON.stringify({ ticket: ticketB64 }),
           signal: ctrl.signal,
         });
         clearTimeout(t);
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          throw new Error(body.error || `HTTP ${res.status}`);
-        }
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
       } catch (e) { clearTimeout(t); throw e; }
       setWifiSt("ok");
     } catch (err) {
