@@ -1382,13 +1382,62 @@ function renderTicketCanvas(sale, bizName = "MI POS") {
   return canvas;
 }
 
+// ─── WiFi Printer (WebSocket → TCP proxy) ────────────────────────────────────
+const WIFI_PROXY_URL = "ws://localhost:9200";
+function useWifiPrinter() {
+  const [status, setStatus] = useState("idle");
+  const [errMsg,  setErrMsg]  = useState("");
+  const wsRef = useRef(null);
+
+  const connect = () => new Promise((resolve) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) { resolve(true); return; }
+    setStatus("connecting"); setErrMsg("");
+    const ws = new WebSocket(WIFI_PROXY_URL);
+    ws.binaryType = "arraybuffer";
+    ws.onopen  = () => { wsRef.current = ws; setStatus("connected"); resolve(true); };
+    ws.onerror = () => {
+      wsRef.current = null;
+      setStatus("error");
+      setErrMsg("No se pudo conectar al proxy. Ejecutá printer-proxy/proxy.js en tu PC.");
+      resolve(false);
+    };
+    ws.onclose = () => { wsRef.current = null; setStatus(s => s !== "error" ? "idle" : s); };
+    ws.onmessage = (e) => {
+      try {
+        const txt = typeof e.data === "string" ? e.data : new TextDecoder().decode(e.data);
+        const d = JSON.parse(txt);
+        if (d.error) { setStatus("error"); setErrMsg(d.error); }
+      } catch {}
+    };
+  });
+
+  const print = async (bytes) => {
+    const ok = await connect();
+    if (!ok) return;
+    setStatus("printing");
+    try {
+      wsRef.current.send(bytes);
+      await new Promise(r => setTimeout(r, 800));
+      setStatus("ok");
+    } catch (err) {
+      setStatus("error");
+      setErrMsg(err.message || String(err));
+    }
+  };
+
+  const reset = () => { setStatus("idle"); setErrMsg(""); };
+
+  return { status, errMsg, print, reset };
+}
+
 // ─── PrintOptionsModal ────────────────────────────────────────────────────────
 function PrintOptionsModal({ sale, bizName, userProfile, onClose }) {
   const uid = userProfile?.id;
   const [locations, setLocations] = useState([]);
   const [selLocId, setSelLocId]   = useState(() => localStorage.getItem("mi-pos-printer-location-id") || "");
-  const [wifiSt, setWifiSt]   = useState("idle");
-  const [wifiErr, setWifiErr] = useState("");
+  const wifiPrinter = useWifiPrinter();
+  const wifiSt  = wifiPrinter.status;
+  const wifiErr = wifiPrinter.errMsg;
   const [btSt, setBtSt]       = useState("idle");
   const [btErr, setBtErr]     = useState("");
   // buildEscPos devuelve base64 directamente
@@ -1423,34 +1472,13 @@ function PrintOptionsModal({ sale, bizName, userProfile, onClose }) {
   const pickLoc = (id) => {
     setSelLocId(id);
     localStorage.setItem("mi-pos-printer-location-id", id);
-    setWifiSt("idle"); setWifiErr("");
+    wifiPrinter.reset();
   };
 
   const tryWifi = async () => {
-    if (["printing","ok"].includes(wifiSt)) return;
-    setWifiSt("printing"); setWifiErr("");
-    try {
-      console.log("[ESC/POS] hex bytes 0-20:", hexDiag);
-      console.log("[ESC/POS] base64 length:", ticketB64.length);
-      const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 15000);
-      try {
-        const res = await fetch(`${printerIp}/imprimir`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ticket: ticketB64 }),
-          signal: ctrl.signal,
-        });
-        clearTimeout(t);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      } catch (e) { clearTimeout(t); throw e; }
-      setWifiSt("ok");
-    } catch (err) {
-      setWifiSt("error");
-      if (err.name === "AbortError")
-        setWifiErr("Sin respuesta (15 s). Verificá que la impresora esté encendida y en la misma red WiFi.");
-      else
-        setWifiErr(err.message || "Error desconocido");
-    }
+    if (["printing","connecting","ok"].includes(wifiSt)) return;
+    const bytes = Uint8Array.from(atob(ticketB64), c => c.charCodeAt(0));
+    await wifiPrinter.print(bytes);
   };
 
   const tryBluetooth = async () => {
@@ -1508,7 +1536,7 @@ function PrintOptionsModal({ sale, bizName, userProfile, onClose }) {
     }, "image/png");
   };
 
-  const wifiBusy = wifiSt === "printing";
+  const wifiBusy = wifiSt === "printing" || wifiSt === "connecting";
   const btBusy   = ["scanning","connecting","sending"].includes(btSt);
   const anyOk    = wifiSt === "ok" || btSt === "ok";
   const showDl   = wifiSt === "error" || btSt === "error" || anyOk;
