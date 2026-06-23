@@ -1427,13 +1427,11 @@ function PrintOptionsModal({ sale, bizName, userProfile, onClose }) {
   };
 
   const tryWifi = async () => {
-    if (["connecting","printing","ok"].includes(wifiSt)) return;
-    setWifiSt("connecting"); setWifiErr("");
+    if (["printing","ok"].includes(wifiSt)) return;
+    setWifiSt("printing"); setWifiErr("");
     try {
-      // Log diagnóstico: primeros bytes deben ser 1B 40
       console.log("[ESC/POS] hex bytes 0-20:", hexDiag);
-      console.log("[ESC/POS] base64 length:", ticketB64.length, "| primeros 40 chars:", ticketB64.slice(0, 40));
-      setWifiSt("printing");
+      console.log("[ESC/POS] base64 length:", ticketB64.length);
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), 15000);
       try {
@@ -1514,7 +1512,7 @@ function PrintOptionsModal({ sale, bizName, userProfile, onClose }) {
     }, "image/png");
   };
 
-  const wifiBusy = ["connecting","printing"].includes(wifiSt);
+  const wifiBusy = wifiSt === "printing";
   const btBusy   = ["scanning","connecting","sending"].includes(btSt);
   const anyOk    = wifiSt === "ok" || btSt === "ok";
   const showDl   = wifiSt === "error" || btSt === "error" || anyOk;
@@ -1561,7 +1559,7 @@ function PrintOptionsModal({ sale, bizName, userProfile, onClose }) {
             <button className="btn-primary"
               style={{ width: "100%", marginTop: 8, opacity: wifiBusy ? 0.6 : 1 }}
               onClick={tryWifi} disabled={wifiBusy || locations.length === 0}>
-              {wifiSt === "connecting" ? "Conectando..." : wifiSt === "printing" ? "Imprimiendo..." : "🖨️ Imprimir por WiFi"}
+              {wifiSt === "printing" ? "Imprimiendo..." : "🖨️ Imprimir por WiFi"}
             </button>
           )}
         </div>
