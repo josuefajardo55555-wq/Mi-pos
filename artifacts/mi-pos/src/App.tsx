@@ -114,6 +114,26 @@ const css = `
   .docs-upload-fname { font-size: 9px; color: #9ca3af; text-align: center; padding: 0 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 100%; }
   .docs-ok-banner { background: #0d2b1e; border: 1px solid #00c896; border-radius: 10px; padding: 10px 14px; color: #00c896; font-size: 13px; font-weight: 600; text-align: center; margin-bottom: 10px; }
   .docs-err-banner { background: #2d1010; border: 1px solid #f87171; border-radius: 10px; padding: 10px 14px; color: #f87171; font-size: 12px; margin-bottom: 10px; }
+  /* ─── Boleta analysis panel ─── */
+  .boleta-modal { display: flex; flex-direction: column; max-height: 88vh; width: 100%; max-width: 480px; overflow: hidden; }
+  .boleta-modal-header { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .boleta-modal-title { flex: 1; font-size: 14px; font-weight: 700; color: #e8eaf0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .boleta-status-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: #141824; border-radius: 8px; margin-bottom: 12px; font-size: 12px; color: #9ca3af; }
+  .boleta-items-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .boleta-items-table th { text-align: left; padding: 5px 6px; color: #6b7280; font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid #2a3045; }
+  .boleta-items-table td { padding: 7px 6px; border-bottom: 1px solid #1e2438; vertical-align: top; }
+  .boleta-item-row { animation: fadeSlideIn 0.25s ease both; }
+  @keyframes fadeSlideIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+  .boleta-item-name { color: #e8eaf0; font-weight: 500; }
+  .boleta-item-barcode { font-family: monospace; color: #6b7280; font-size: 10px; }
+  .boleta-item-price { color: #00c896; font-weight: 600; text-align: right; white-space: nowrap; }
+  .boleta-item-qty { color: #9ca3af; text-align: center; }
+  .boleta-total-row td { padding: 9px 6px; border-top: 2px solid #2a3045; font-weight: 700; color: #00c896; font-size: 13px; border-bottom: none; }
+  .boleta-scroll { flex: 1; overflow-y: auto; min-height: 80px; }
+  .boleta-empty { text-align: center; padding: 28px 0; color: #6b7280; font-size: 13px; }
+  .boleta-analyze-btn { font-size: 11px; padding: 4px 9px; background: #1e3a2f; border: 1px solid #00c89666; border-radius: 6px; color: #00c896; cursor: pointer; font-family: inherit; font-weight: 600; white-space: nowrap; flex-shrink: 0; }
+  .boleta-analyze-btn:hover { background: #00c89622; }
+  .boleta-analyze-btn:disabled { opacity: 0.5; cursor: not-allowed; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .spin { display: inline-block; animation: spin 0.8s linear infinite; }
   /* ─── Print modal ─── */
@@ -3448,6 +3468,60 @@ function DocsView({ userProfile }) {
   const isUploading = items.some(it => it.status === "uploading");
   const hasModal    = items.length > 0;
 
+  // ── Boleta analysis (streaming) ────────────────────────────────────────────
+  const [analyzeDoc,      setAnalyzeDoc]      = useState(null);  // doc being analyzed
+  const [analyzeItems,    setAnalyzeItems]    = useState([]);    // detected items
+  const [analyzeLoading,  setAnalyzeLoading]  = useState(false);
+  const [analyzeDone,     setAnalyzeDone]     = useState(false);
+  const [analyzeSubtotal, setAnalyzeSubtotal] = useState(null);
+  const [analyzeError,    setAnalyzeError]    = useState("");
+  const analyzeScrollRef = useRef(null);
+  useEffect(() => { analyzeScrollRef.current?.scrollIntoView({ behavior: "smooth" }); }, [analyzeItems]);
+
+  const startAnalysis = async (doc) => {
+    setAnalyzeDoc(doc);
+    setAnalyzeItems([]);
+    setAnalyzeDone(false);
+    setAnalyzeSubtotal(null);
+    setAnalyzeError("");
+    setAnalyzeLoading(true);
+    try {
+      const res = await fetch("/api/analyze-boleta", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: doc.fileUrl, mimeType: doc.mimeType, name: doc.name, type: doc.type, date: doc.date }),
+      });
+      const reader = res.body?.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (reader) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const data = JSON.parse(line.slice(6));
+            if (data.item)  { setAnalyzeItems(prev => [...prev, data.item]); }
+            if (data.done)  { setAnalyzeDone(true); if (data.subtotal != null) setAnalyzeSubtotal(data.subtotal); }
+            if (data.error) { setAnalyzeError(data.error); setAnalyzeDone(true); }
+          } catch {}
+        }
+      }
+    } catch (err) {
+      setAnalyzeError(err.message || "Error de conexión");
+      setAnalyzeDone(true);
+    } finally {
+      setAnalyzeLoading(false);
+    }
+  };
+
+  const closeAnalysis = () => { setAnalyzeDoc(null); setAnalyzeItems([]); setAnalyzeDone(false); setAnalyzeSubtotal(null); setAnalyzeError(""); };
+
+  const fmtPrice = (n) => n != null ? `$${Number(n).toLocaleString("es-AR")}` : "—";
+
   // ── AI Chat ────────────────────────────────────────────────────────────────
   const [chatMsgs, setChatMsgs]   = useState([]);
   const [chatInput, setChatInput] = useState("");
@@ -3503,6 +3577,84 @@ function DocsView({ userProfile }) {
 
   return (
     <div className="docs-wrap">
+      {/* ── Boleta analysis modal ─────────────────────────────────────────── */}
+      {analyzeDoc && (
+        <div className="modal-overlay" onClick={analyzeDone ? closeAnalysis : undefined}>
+          <div className="modal boleta-modal" onClick={e => e.stopPropagation()}>
+            <div className="boleta-modal-header">
+              <span style={{ fontSize: 20 }}>🔍</span>
+              <div className="boleta-modal-title">{analyzeDoc.name || analyzeDoc.fileName}</div>
+              {analyzeDone && (
+                <button onClick={closeAnalysis}
+                  style={{ background: "none", border: "none", color: "#6b7280", fontSize: 20, cursor: "pointer", padding: "0 2px", lineHeight: 1 }}>✕</button>
+              )}
+            </div>
+
+            {/* Status bar */}
+            <div className="boleta-status-bar">
+              {!analyzeDone ? (
+                <>
+                  <span className="spin">⏳</span>
+                  <span>Analizando boleta… {analyzeItems.length > 0 && `${analyzeItems.length} ítem${analyzeItems.length !== 1 ? "s" : ""} encontrado${analyzeItems.length !== 1 ? "s" : ""}`}</span>
+                </>
+              ) : analyzeError ? (
+                <><span>❌</span><span style={{ color: "#f87171" }}>{analyzeError}</span></>
+              ) : (
+                <><span>✅</span><span style={{ color: "#00c896" }}>{analyzeItems.length} ítem{analyzeItems.length !== 1 ? "s" : ""} detectado{analyzeItems.length !== 1 ? "s" : ""}</span></>
+              )}
+            </div>
+
+            {/* Items table */}
+            <div className="boleta-scroll">
+              {analyzeItems.length === 0 && !analyzeDone && (
+                <div className="boleta-empty">Esperando primer ítem…</div>
+              )}
+              {analyzeItems.length === 0 && analyzeDone && !analyzeError && (
+                <div className="boleta-empty">No se detectaron ítems en este documento.</div>
+              )}
+              {analyzeItems.length > 0 && (
+                <table className="boleta-items-table">
+                  <thead>
+                    <tr>
+                      <th style={{ width: "38%" }}>Producto</th>
+                      <th style={{ width: "12%", textAlign: "center" }}>Cant.</th>
+                      <th style={{ width: "20%", textAlign: "right" }}>P. Unit.</th>
+                      <th style={{ width: "20%", textAlign: "right" }}>Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {analyzeItems.map((it, i) => (
+                      <tr key={i} className="boleta-item-row">
+                        <td>
+                          <div className="boleta-item-name">{it.name ?? "—"}</div>
+                          {it.barcode && <div className="boleta-item-barcode">{it.barcode}</div>}
+                        </td>
+                        <td className="boleta-item-qty">{it.qty ?? "—"}</td>
+                        <td className="boleta-item-price">{fmtPrice(it.unit_price)}</td>
+                        <td className="boleta-item-price">{fmtPrice(it.total)}</td>
+                      </tr>
+                    ))}
+                    {analyzeDone && analyzeSubtotal != null && (
+                      <tr className="boleta-total-row">
+                        <td colSpan={3} style={{ color: "#9ca3af", fontWeight: 700 }}>TOTAL</td>
+                        <td className="boleta-item-price">{fmtPrice(analyzeSubtotal)}</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              )}
+              <div ref={analyzeScrollRef} />
+            </div>
+
+            {analyzeDone && (
+              <div className="modal-actions" style={{ marginTop: 14 }}>
+                <button className="btn-secondary" style={{ flex: 1 }} onClick={closeAnalysis}>Cerrar</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* ── Multi-file upload modal ────────────────────────────────────────── */}
       {hasModal && (
         <div className="modal-overlay" onClick={() => !isUploading && (setItems([]), setSummary(null))}>
@@ -3610,6 +3762,13 @@ function DocsView({ userProfile }) {
               <div className="doc-name">{doc.name || doc.fileName}</div>
               <div className="doc-date">{doc.date}</div>
             </div>
+            <button
+              className="boleta-analyze-btn"
+              disabled={analyzeLoading}
+              onClick={() => startAnalysis(doc)}
+              title="Analizar con IA">
+              🔍 Analizar
+            </button>
             <a href={doc.fileUrl} target="_blank" rel="noopener noreferrer"
               style={{ color: "#6b7280", fontSize: 20, textDecoration: "none", padding: "4px 6px", flexShrink: 0 }}>↗</a>
           </div>
