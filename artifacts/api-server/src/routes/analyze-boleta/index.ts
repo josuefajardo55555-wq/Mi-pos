@@ -25,27 +25,30 @@ router.post("/analyze-boleta", async (req, res) => {
   const isPdf = mimeType === "application/pdf";
 
   if (!isImage && !isPdf) {
-    res.write(`data: ${JSON.stringify({ error: "Tipo de archivo no soportado para análisis" })}\n\n`);
+    res.write(`data: ${JSON.stringify({ error: "Tipo de archivo no soportado" })}\n\n`);
     res.end();
     return;
   }
 
   try {
-    const prompt = `Analizá este documento comercial (${type ?? "boleta"} de "${name ?? "proveedor desconocido"}", fecha ${date ?? "no especificada"}).
+    const prompt = `Analizás un documento comercial (${type ?? "boleta"} de "${name ?? "proveedor"}", referencia de fecha ${date ?? "no especificada"}).
 
-Extraé TODOS los ítems y productos que aparecen. Por cada ítem que identifiques, escribí INMEDIATAMENTE una sola línea JSON con este formato exacto:
-{"barcode":"CODIGO_O_VACIO","name":"NOMBRE_DEL_PRODUCTO","qty":CANTIDAD,"unit_price":PRECIO_UNITARIO,"total":PRECIO_TOTAL_LINEA}
+Extraé dos cosas únicamente:
+1. La FECHA DE EMISIÓN del documento (la que figura en la boleta/factura, no la de hoy).
+2. Por cada ítem o producto que aparezca en el documento, su nombre, código de barras (si es visible) y precio unitario.
+
+Por cada ítem que encuentres, escribí INMEDIATAMENTE una línea JSON con este formato exacto:
+{"barcode":"CODIGO_O_VACIO","name":"NOMBRE_DEL_PRODUCTO","price":PRECIO_UNITARIO}
+
+Cuando hayas recorrido todos los ítems, escribí esta línea de cierre:
+{"done":true,"doc_date":"YYYY-MM-DD","items_count":N}
 
 REGLAS ESTRICTAS:
-- Escribí cada línea JSON en cuanto identifiques el ítem — no esperes a terminar de leer todo el documento
-- Sin markdown, sin triple backticks, sin explicaciones — SOLO líneas JSON, una por línea
-- Si no hay código de barras visible, usá "" para barcode
-- Los precios son números sin símbolo de moneda ni puntos de miles (ej: 1250.50 no "1.250,50")
-- Si no podés leer un campo con certeza, usá null
-- Cuando hayas encontrado TODOS los ítems, escribí esta línea de cierre:
-{"done":true,"subtotal":MONTO_TOTAL_DEL_DOCUMENTO,"items_count":CANTIDAD_TOTAL_ITEMS}
-
-Empezá con el primer ítem ahora.`;
+- Solo líneas JSON, sin markdown, sin backticks, sin texto explicativo
+- barcode: string vacío "" si no hay código visible
+- price: número sin símbolo de moneda ni separadores de miles (ej: 1250 no "$1.250,00")
+- doc_date: en formato YYYY-MM-DD, o null si no encontrás ninguna fecha en el documento
+- Emitir cada línea apenas identificás el ítem, sin esperar al final`;
 
     const contentBlocks: any[] = [];
 
@@ -78,9 +81,8 @@ Empezá con el primer ítem ahora.`;
       ) {
         buffer += event.delta.text;
 
-        // Extract complete newline-terminated lines from the buffer
         const lines = buffer.split("\n");
-        buffer = lines.pop() ?? ""; // keep the last incomplete line in buffer
+        buffer = lines.pop() ?? "";
 
         for (const line of lines) {
           const trimmed = line.trim();
@@ -89,26 +91,26 @@ Empezá con el primer ítem ahora.`;
             const parsed = JSON.parse(trimmed);
             if (parsed.done === true) {
               res.write(
-                `data: ${JSON.stringify({ done: true, subtotal: parsed.subtotal ?? null, items_count: parsed.items_count ?? null })}\n\n`,
+                `data: ${JSON.stringify({ done: true, doc_date: parsed.doc_date ?? null, items_count: parsed.items_count ?? null })}\n\n`,
               );
               doneSent = true;
             } else if (parsed.name !== undefined) {
               res.write(`data: ${JSON.stringify({ item: parsed })}\n\n`);
             }
           } catch {
-            // Incomplete or non-JSON line — skip
+            // incomplete line
           }
         }
       }
     }
 
-    // Flush any remaining buffer content
+    // Flush remaining buffer
     if (buffer.trim()) {
       try {
         const parsed = JSON.parse(buffer.trim());
         if (parsed.done === true) {
           res.write(
-            `data: ${JSON.stringify({ done: true, subtotal: parsed.subtotal ?? null, items_count: parsed.items_count ?? null })}\n\n`,
+            `data: ${JSON.stringify({ done: true, doc_date: parsed.doc_date ?? null, items_count: parsed.items_count ?? null })}\n\n`,
           );
           doneSent = true;
         } else if (parsed.name !== undefined) {
@@ -120,13 +122,13 @@ Empezá con el primer ítem ahora.`;
     }
 
     if (!doneSent) {
-      res.write(`data: ${JSON.stringify({ done: true, subtotal: null, items_count: null })}\n\n`);
+      res.write(`data: ${JSON.stringify({ done: true, doc_date: null, items_count: null })}\n\n`);
     }
 
     res.end();
   } catch (err: any) {
     res.write(
-      `data: ${JSON.stringify({ error: err.message ?? "Error al analizar el documento" })}\n\n`,
+      `data: ${JSON.stringify({ error: err.message ?? "Error al analizar" })}\n\n`,
     );
     res.end();
   }
