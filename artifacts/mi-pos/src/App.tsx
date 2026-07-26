@@ -3424,8 +3424,6 @@ function DocsView({ userProfile }) {
       preview: f.type.startsWith("image/") ? URL.createObjectURL(f) : null,
       status: "pending",
       error: null,
-      analyzeStatus: null,
-      analyzeResult: null,
     })));
     e.target.value = "";
   };
@@ -3492,7 +3490,7 @@ function DocsView({ userProfile }) {
       await Promise.race([uploadBytes(sRef, blob, { contentType: mime }), uploadTimeout]);
       const fileUrl = await getDownloadURL(sRef);
 
-      const docRef = await addDoc(collection(db, "locals", localId, "documents"), {
+      await addDoc(collection(db, "locals", localId, "documents"), {
         type: docType,
         name: docName.trim() || item.file.name,
         date: docDate,
@@ -3503,10 +3501,6 @@ function DocsView({ userProfile }) {
         createdAt: serverTimestamp(),
       });
       updateItem(item.id, { status: "done" });
-
-      // Auto-analyze after upload
-      await analyzeDocHelper(item.id, docRef.id, fileUrl, mime, docName.trim() || item.file.name, docType, docDate);
-
       return { ok: true };
     } catch (err) {
       const msg = storageErrMsg(err);
@@ -3546,10 +3540,8 @@ function DocsView({ userProfile }) {
     return p.length === 3 ? `${p[2]}/${p[1]}` : d;
   };
 
-  const isUploading  = items.some(it => it.status === "uploading");
-  const isAnalyzing  = items.some(it => it.analyzeStatus === "analyzing");
-  const isBusy       = isUploading || isAnalyzing;
-  const hasModal     = items.length > 0;
+  const isUploading = items.some(it => it.status === "uploading");
+  const hasModal    = items.length > 0;
 
   // ── AI Chat ────────────────────────────────────────────────────────────────
   const [chatMsgs, setChatMsgs]   = useState([]);
@@ -3626,16 +3618,11 @@ function DocsView({ userProfile }) {
                     }
                     {it.status !== "pending" && (
                       <div className={`docs-upload-overlay ${it.status}`}>
-                        {it.analyzeStatus === "analyzing"
-                          ? <span className="spin" style={{ fontSize: 16 }}>🔍</span>
-                          : statusIcon(it.status)}
+                        {statusIcon(it.status)}
                       </div>
                     )}
                     {it.preview && <div className="docs-upload-fname" style={{ position: "absolute", bottom: 2, left: 0, right: 0, background: "rgba(0,0,0,0.5)", padding: "1px 4px" }}>{it.file.name}</div>}
                   </div>
-                  {it.analyzeStatus === "analyzing" && <div className="upload-item-analysis analyzing">🔍 Analizando…</div>}
-                  {it.analyzeStatus === "done" && <div className="upload-item-analysis done">✅ {it.analyzeResult?.itemsCount ?? 0} · {fmtDocDate(it.analyzeResult?.date)}</div>}
-                  {it.analyzeStatus === "error" && <div className="upload-item-analysis error">⚠️ Sin análisis</div>}
                 </div>
               ))}
             </div>
@@ -3673,16 +3660,14 @@ function DocsView({ userProfile }) {
 
             <div className="modal-actions" style={{ marginTop: 12 }}>
               <button className="btn-secondary" style={{ flex: 1 }}
-                onClick={() => { setItems([]); setSummary(null); }} disabled={isBusy}>
+                onClick={() => { setItems([]); setSummary(null); }} disabled={isUploading}>
                 Cancelar
               </button>
-              <button className="btn-primary" style={{ flex: 2, opacity: isBusy ? 0.65 : 1 }}
-                onClick={handleUploadAll} disabled={isBusy}>
+              <button className="btn-primary" style={{ flex: 2, opacity: isUploading ? 0.65 : 1 }}
+                onClick={handleUploadAll} disabled={isUploading}>
                 {isUploading
                   ? `Subiendo ${items.filter(i => i.status === "done" || i.status === "error").length}/${items.length}…`
-                  : isAnalyzing
-                    ? `Extrayendo precios…`
-                    : `Subir ${items.length} archivo${items.length !== 1 ? "s" : ""}`}
+                  : `Subir ${items.length} archivo${items.length !== 1 ? "s" : ""}`}
               </button>
             </div>
           </div>
