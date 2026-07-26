@@ -114,14 +114,6 @@ const css = `
   .docs-upload-fname { font-size: 9px; color: #9ca3af; text-align: center; padding: 0 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 100%; }
   .docs-ok-banner { background: #0d2b1e; border: 1px solid #00c896; border-radius: 10px; padding: 10px 14px; color: #00c896; font-size: 13px; font-weight: 600; text-align: center; margin-bottom: 10px; }
   .docs-err-banner { background: #2d1010; border: 1px solid #f87171; border-radius: 10px; padding: 10px 14px; color: #f87171; font-size: 12px; margin-bottom: 10px; }
-  .doc-analysis-chip { display:inline-flex; align-items:center; gap:3px; background:#0d2b1e; border:1px solid #00c89644; border-radius:5px; padding:2px 7px; font-size:10px; color:#00c896; font-weight:600; white-space:nowrap; flex-shrink:0; }
-  .doc-reanalyze-btn { background:none; border:none; color:#6b7280; font-size:13px; cursor:pointer; padding:3px 5px; border-radius:4px; font-family:inherit; line-height:1; flex-shrink:0; }
-  .doc-reanalyze-btn:hover:not(:disabled) { color:#9ca3af; background:#252b3b; }
-  .doc-reanalyze-btn:disabled { opacity:0.4; cursor:not-allowed; }
-  .upload-item-analysis { font-size:9px; text-align:center; padding:1px 2px; min-height:13px; color:#6b7280; line-height:1.3; }
-  .upload-item-analysis.analyzing { color:#9ca3af; }
-  .upload-item-analysis.done { color:#00c896; font-weight:600; }
-  .upload-item-analysis.error { color:#f87171; }
   /* ─── Boleta analysis panel ─── */
   .boleta-modal { display: flex; flex-direction: column; max-height: 88vh; width: 100%; max-width: 480px; overflow: hidden; }
   .boleta-modal-header { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
@@ -3400,7 +3392,7 @@ function DocsView({ userProfile }) {
   }, [localId]);
 
   // ── Multi-file upload ──────────────────────────────────────────────────────
-  // items: [{ id, file, preview, status, error, analyzeStatus, analyzeResult }]
+  // items: [{ id, file, preview, status, error }]
   const fileInputRef = useRef(null);
   const [items, setItems]     = useState([]);
   const [docType, setDocType] = useState("Boleta");
@@ -3429,55 +3421,6 @@ function DocsView({ userProfile }) {
   };
 
   // Stream analysis from the API, save results to Firestore, update item state
-  const analyzeDocHelper = async (itemId, docId, fileUrl, mimeType, docNameStr, docTypeStr, docDateStr) => {
-    if (itemId) updateItem(itemId, { analyzeStatus: "analyzing" });
-    const foundItems = [];
-    let extractedDate = null;
-    try {
-      const res = await fetch("/api/analyze-boleta", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: fileUrl, mimeType, name: docNameStr, type: docTypeStr, date: docDateStr }),
-      });
-      const reader = res.body?.getReader();
-      const decoder = new TextDecoder();
-      let buf = "";
-      while (reader) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split("\n");
-        buf = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          try {
-            const data = JSON.parse(line.slice(6));
-            if (data.item) foundItems.push({ barcode: data.item.barcode || "", name: data.item.name, price: data.item.price });
-            if (data.done && data.doc_date) extractedDate = data.doc_date;
-            if (data.error) throw new Error(data.error);
-          } catch {}
-        }
-      }
-      const analysis = {
-        items: foundItems,
-        extractedDate: extractedDate || docDateStr,
-        itemsCount: foundItems.length,
-        analyzedAt: serverTimestamp(),
-      };
-      await updateDoc(doc(db, "locals", localId, "documents", docId), {
-        analysis,
-        ...(extractedDate ? { date: extractedDate } : {}),
-      });
-      if (itemId) updateItem(itemId, {
-        analyzeStatus: "done",
-        analyzeResult: { date: extractedDate || docDateStr, itemsCount: foundItems.length },
-      });
-    } catch {
-      if (itemId) updateItem(itemId, { analyzeStatus: "error" });
-      // Don't rethrow — analysis failure doesn't invalidate the upload
-    }
-  };
-
   const uploadOne = async (item) => {
     updateItem(item.id, { status: "uploading" });
     try {
@@ -3520,24 +3463,6 @@ function DocsView({ userProfile }) {
     if (failed === 0) {
       setTimeout(() => { setItems([]); setSummary(null); }, 2000);
     }
-  };
-
-  // Re-analyze an existing saved document (manual button)
-  const [reanalyzing, setReanalyzing] = useState({});
-  const reanalyzeDoc = async (d) => {
-    if (reanalyzing[d.id]) return;
-    setReanalyzing(r => ({ ...r, [d.id]: true }));
-    try {
-      await analyzeDocHelper(null, d.id, d.fileUrl, d.mimeType, d.name, d.type, d.date);
-    } finally {
-      setReanalyzing(r => { const n = { ...r }; delete n[d.id]; return n; });
-    }
-  };
-
-  const fmtDocDate = (d) => {
-    if (!d) return "";
-    const p = d.split("-");
-    return p.length === 3 ? `${p[2]}/${p[1]}` : d;
   };
 
   const isUploading = items.some(it => it.status === "uploading");
@@ -3705,22 +3630,8 @@ function DocsView({ userProfile }) {
             <div className="doc-info">
               <div className="doc-type">{doc.type}</div>
               <div className="doc-name">{doc.name || doc.fileName}</div>
-              <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap", marginTop: 2 }}>
-                <span className="doc-date">{doc.analysis?.extractedDate || doc.date}</span>
-                {doc.analysis && (
-                  <span className="doc-analysis-chip">
-                    {doc.analysis.itemsCount} prod · ${(doc.analysis.items?.[0]?.price ?? "—")}
-                  </span>
-                )}
-              </div>
+              <div className="doc-date">{doc.date}</div>
             </div>
-            <button
-              className="doc-reanalyze-btn"
-              title="Re-analizar con IA"
-              disabled={!!reanalyzing[doc.id]}
-              onClick={() => reanalyzeDoc(doc)}>
-              {reanalyzing[doc.id] ? <span className="spin">⏳</span> : "↺"}
-            </button>
             <a href={doc.fileUrl} target="_blank" rel="noopener noreferrer"
               style={{ color: "#6b7280", fontSize: 20, textDecoration: "none", padding: "4px 6px", flexShrink: 0 }}>↗</a>
           </div>
