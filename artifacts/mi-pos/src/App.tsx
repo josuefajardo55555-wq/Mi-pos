@@ -3429,8 +3429,7 @@ function DocsView({ userProfile }) {
       const path = `locals/${localId}/documents/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
       const sRef = ref(storage, path);
 
-      const uploadTimeout = new Promise((_, rej) => setTimeout(() => rej({ message: "timeout" }), 30000));
-      await Promise.race([uploadBytes(sRef, blob, { contentType: mime }), uploadTimeout]);
+      await uploadBytes(sRef, blob, { contentType: mime });
       const fileUrl = await getDownloadURL(sRef);
 
       await addDoc(collection(db, "locals", localId, "documents"), {
