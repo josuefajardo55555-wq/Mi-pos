@@ -65,11 +65,7 @@ REGLAS ESTRICTAS:
       messages: [{ role: "user", content: contentBlocks }],
     };
 
-    if (isPdf) streamParams.betas = ["pdfs-2024-09-25"];
-
-    const stream = isPdf
-      ? anthropic.beta.messages.stream(streamParams)
-      : anthropic.messages.stream(streamParams);
+    const stream = anthropic.messages.stream(streamParams);
 
     let buffer = "";
     let doneSent = false;
