@@ -13,7 +13,7 @@ import {
   createUserWithEmailAndPassword, signInWithEmailAndPassword,
   onAuthStateChanged, signOut
 } from "firebase/auth";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
 
 const CATEGORIES = ["Todas", "Lácteos", "Básicos", "Aceites", "Panadería", "Snacks", "Enlatados", "Bebidas", "Frutas y Verd.", "Higiene", "Limpieza"];
 const fmt = (n) => `$${Number(n).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -3392,7 +3392,7 @@ function DocsView({ userProfile }) {
   }, [localId]);
 
   // ── Multi-file upload ──────────────────────────────────────────────────────
-  // items: [{ id, file, preview, status, error }]
+  // items: [{ id, file, preview, status, error, progress }]
   const fileInputRef = useRef(null);
   const [items, setItems]     = useState([]);
   const [docType, setDocType] = useState("Boleta");
@@ -3410,27 +3410,42 @@ function DocsView({ userProfile }) {
     setDocName(files[0].name.replace(/\.[^.]+$/, ""));
     setDocDate(new Date().toISOString().split("T")[0]);
     setDocType("Boleta");
+    const MAX_MB = 15;
     setItems(files.map(f => ({
       id: Math.random().toString(36).slice(2),
       file: f,
       preview: f.type.startsWith("image/") ? URL.createObjectURL(f) : null,
-      status: "pending",
-      error: null,
+      status: f.size > MAX_MB * 1024 * 1024 ? "error" : "pending",
+      error: f.size > MAX_MB * 1024 * 1024 ? `Archivo muy grande (máx ${MAX_MB} MB)` : null,
+      progress: 0,
     })));
     e.target.value = "";
   };
 
-  // Stream analysis from the API, save results to Firestore, update item state
   const uploadOne = async (item) => {
-    updateItem(item.id, { status: "uploading" });
+    if (item.status === "error") return { ok: false, error: item.error };
+    updateItem(item.id, { status: "uploading", progress: 0 });
     try {
       const { blob, mime } = await compressImage(item.file);
       const ext = mime === "image/jpeg" ? "jpg" : (item.file.name.split(".").pop() || "bin");
       const path = `locals/${localId}/documents/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
       const sRef = ref(storage, path);
 
-      await uploadBytes(sRef, blob, { contentType: mime });
-      const fileUrl = await getDownloadURL(sRef);
+      // Resumable upload with progress tracking
+      const fileUrl = await new Promise((resolve, reject) => {
+        const task = uploadBytesResumable(sRef, blob, { contentType: mime });
+        task.on("state_changed",
+          snap => {
+            const pct = Math.round(snap.bytesTransferred / snap.totalBytes * 100);
+            updateItem(item.id, { progress: pct });
+          },
+          err => reject(err),
+          async () => {
+            try { resolve(await getDownloadURL(task.snapshot.ref)); }
+            catch (e) { reject(e); }
+          }
+        );
+      });
 
       await addDoc(collection(db, "locals", localId, "documents"), {
         type: docType,
@@ -3540,13 +3555,24 @@ function DocsView({ userProfile }) {
                           <span className="docs-upload-fname">{it.file.name}</span>
                         </div>
                     }
-                    {it.status !== "pending" && (
+                    {it.status !== "pending" && it.status !== "uploading" && (
                       <div className={`docs-upload-overlay ${it.status}`}>
                         {statusIcon(it.status)}
                       </div>
                     )}
                     {it.preview && <div className="docs-upload-fname" style={{ position: "absolute", bottom: 2, left: 0, right: 0, background: "rgba(0,0,0,0.5)", padding: "1px 4px" }}>{it.file.name}</div>}
                   </div>
+                  {it.status === "uploading" && (
+                    <div style={{ marginTop: 3 }}>
+                      <div style={{ height: 4, background: "#1e2535", borderRadius: 2, overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${it.progress ?? 0}%`, background: "#3b82f6", borderRadius: 2, transition: "width 0.3s" }} />
+                      </div>
+                      <div style={{ fontSize: 9, color: "#9ca3af", textAlign: "center", marginTop: 1 }}>{it.progress ?? 0}%</div>
+                    </div>
+                  )}
+                  {it.status === "error" && it.error && (
+                    <div style={{ fontSize: 9, color: "#f87171", textAlign: "center", marginTop: 2, lineHeight: 1.3 }}>{it.error}</div>
+                  )}
                 </div>
               ))}
             </div>
