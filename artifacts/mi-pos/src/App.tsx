@@ -317,6 +317,10 @@ const css = `
   .inv-table td { padding: 8px 10px; border-bottom: 1px solid #2a3045; }
   .inv-table tr:hover td { background: #252b3b; }
   .btn-add { background: linear-gradient(135deg, #00c896, #00a87a); border: none; border-radius: 8px; padding: 8px 14px; color: #1a1f2e; font-weight: 700; font-size: 12px; cursor: pointer; font-family: 'Inter', sans-serif; }
+  .json-menu { position:absolute; top:calc(100% + 4px); right:0; background:#1e2438; border:1px solid #2a3045; border-radius:8px; min-width:130px; z-index:200; overflow:hidden; box-shadow:0 4px 16px #0006; }
+  .json-menu-item { display:block; width:100%; background:none; border:none; color:#e5e7eb; font-family:'Inter',sans-serif; font-size:13px; font-weight:500; padding:10px 14px; text-align:left; cursor:pointer; }
+  .json-menu-item:hover:not(:disabled) { background:#252b3b; }
+  .json-menu-item:disabled { opacity:0.5; cursor:not-allowed; }
   .btn-edit { background: #252b3b; border: 1px solid #3a4158; border-radius: 5px; padding: 4px 8px; color: #9ca3af; font-size: 11px; cursor: pointer; margin-right: 3px; font-family: 'Inter', sans-serif; }
   .btn-del { background: transparent; border: none; padding: 4px 8px; color: #6b7280; font-size: 11px; cursor: pointer; font-family: 'Inter', sans-serif; }
   .select-input { background: #252b3b; border: 1px solid #3a4158; border-radius: 8px; padding: 9px 11px; color: #e8eaf0; font-size: 14px; outline: none; font-family: 'Inter', sans-serif; width: 100%; }
@@ -2073,9 +2077,10 @@ function InventoryView({ products, userProfile, categories }) {
   const [search, setSearch]       = useState("");
   const [modal, setModal]         = useState(null);
   const [showCats, setShowCats]   = useState(false);
-  const [importing, setImporting] = useState(false);
-  const [importMsg, setImportMsg] = useState(null); // {ok, skipped, error?}
-  const importRef                 = useRef(null);
+  const [importing, setImporting]   = useState(false);
+  const [importMsg, setImportMsg]   = useState(null); // {ok, skipped, error?}
+  const [jsonMenu, setJsonMenu]     = useState(false);
+  const importRef                   = useRef(null);
   const localId = useContext(LocalCtx);
   const canEdit = userProfile?.role === "owner" || userProfile?.permissions?.editInventory;
 
@@ -2090,6 +2095,18 @@ function InventoryView({ products, userProfile, categories }) {
 
   const handleDelete = async (id) => {
     if (confirm("¿Eliminar este producto?")) await deleteDoc(doc(db, "locals", localId, "products", id));
+  };
+
+  const handleExport = () => {
+    const data = products.map(({ id: _id, ...p }) => p);
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href     = url;
+    a.download = `productos_${new Date().toISOString().split("T")[0]}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setJsonMenu(false);
   };
 
   const handleImport = async (e) => {
@@ -2167,12 +2184,24 @@ function InventoryView({ products, userProfile, categories }) {
           <div className="search-box" style={{ flex: 1 }}><span className="search-icon">🔍</span><input placeholder="Buscar..." value={search} onChange={e => setSearch(e.target.value)} /></div>
           {canEdit && <button className="btn-add" style={{ background: "#3a4158", border: "1px solid #4a5168", fontSize: 18, padding: "6px 10px" }} onClick={() => setShowCats(true)} title="Gestionar categorías">🏷️</button>}
           {canEdit && (
-            <button className="btn-add" disabled={importing}
-              style={{ background: "#1e2a3b", border: "1px solid #3a5168", color: "#7ec8e3", opacity: importing ? 0.6 : 1 }}
-              onClick={() => importRef.current?.click()}
-              title="Importar productos desde JSON">
-              {importing ? "⏳" : "📥"} Importar
-            </button>
+            <div style={{ position: "relative" }}>
+              {jsonMenu && <div style={{ position:"fixed", inset:0, zIndex:199 }} onClick={() => setJsonMenu(false)} />}
+              <button className="btn-add"
+                style={{ background: "#1e2a3b", border: "1px solid #3a5168", color: "#7ec8e3" }}
+                onClick={() => setJsonMenu(o => !o)}>
+                {"{ }"} JSON ▾
+              </button>
+              {jsonMenu && (
+                <div className="json-menu" onClick={e => e.stopPropagation()}>
+                  <button className="json-menu-item" onClick={() => { setJsonMenu(false); importRef.current?.click(); }} disabled={importing}>
+                    {importing ? "⏳" : "📥"} Importar
+                  </button>
+                  <button className="json-menu-item" onClick={handleExport}>
+                    📤 Exportar
+                  </button>
+                </div>
+              )}
+            </div>
           )}
           {canEdit && <button className="btn-add" onClick={() => setModal("new")}>+ Nuevo</button>}
         </div>
