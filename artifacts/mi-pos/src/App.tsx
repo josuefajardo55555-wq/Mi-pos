@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useState, useEffect, useRef, useMemo, createContext, useContext } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, createContext, useContext } from "react";
 import {
   ResponsiveContainer, LineChart, Line, BarChart, Bar,
   PieChart, Pie, Cell, XAxis, YAxis, Tooltip, CartesianGrid, Legend
@@ -970,11 +970,11 @@ function CameraScanner({ onCode, onClose }) {
 }
 
 // ─── ProductModal ─────────────────────────────────────────────────────────────
-function ProductModal({ product, onSave, onClose, categories }) {
+function ProductModal({ product, onSave, onClose, categories, prefillBarcode = "" }) {
   const [form, setForm] = useState(
     product
       ? { ...product, minStock: product.minStock ?? 6 }
-      : { name: "", category: "Básicos", type: "unit", price: "", stock: "", unit: "pza", barcode: "", img: "", minStock: 6 }
+      : { name: "", category: "Básicos", type: "unit", price: "", stock: "", unit: "pza", barcode: prefillBarcode, img: "", minStock: 6 }
   );
   const [imgOk, setImgOk]         = useState(!!product?.img); // true once preview <img> loads OK
   const [showScanner, setShowScanner] = useState(false);
@@ -2078,11 +2078,49 @@ function InventoryView({ products, userProfile, categories }) {
   const [modal, setModal]         = useState(null);
   const [showCats, setShowCats]   = useState(false);
   const [importing, setImporting]   = useState(false);
-  const [importMsg, setImportMsg]   = useState(null); // {ok, skipped, error?}
+  const [importMsg, setImportMsg]   = useState(null);
   const [jsonMenu, setJsonMenu]     = useState(false);
-  const importRef                   = useRef(null);
+  const [showInvScanner, setShowInvScanner] = useState(false);
+  const [scanBarcode, setScanBarcode]       = useState("");
+  const importRef    = useRef(null);
+  const physBuf      = useRef("");
+  const lastPhysKey  = useRef(0);
   const localId = useContext(LocalCtx);
   const canEdit = userProfile?.role === "owner" || userProfile?.permissions?.editInventory;
+
+  // Handle a scanned barcode: open edit modal if product found, otherwise new product with barcode pre-filled
+  const handleInvScan = useCallback((code) => {
+    setShowInvScanner(false);
+    const found = products.find(p => p.barcode === code);
+    if (found) {
+      setScanBarcode("");
+      setModal(found);
+    } else {
+      setScanBarcode(code);
+      setModal("new");
+    }
+  }, [products]);
+
+  // Global physical barcode reader listener (rapid keystrokes < 60 ms + Enter)
+  useEffect(() => {
+    if (!canEdit) return;
+    const onKey = (e) => {
+      const tag = (document.activeElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      const now = Date.now();
+      if (e.key === "Enter") {
+        const code = physBuf.current;
+        physBuf.current = "";
+        if (code.length > 3) handleInvScan(code);
+      } else if (e.key.length === 1) {
+        const gap = now - lastPhysKey.current;
+        physBuf.current = gap < 60 ? physBuf.current + e.key : e.key;
+        lastPhysKey.current = now;
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [canEdit, handleInvScan]);
 
   const filtered = products.filter(p => p.name.toLowerCase().includes(search.toLowerCase()) || (p.barcode && p.barcode.includes(search)));
 
@@ -2164,7 +2202,14 @@ function InventoryView({ products, userProfile, categories }) {
       {/* Hidden file picker — triggered by the Importar button */}
       <input ref={importRef} type="file" accept=".json,application/json"
         style={{ display: "none" }} onChange={handleImport} />
-      {modal && <ProductModal product={modal === "new" ? null : modal} onSave={handleSave} onClose={() => setModal(null)} categories={categories} />}
+      {showInvScanner && <CameraScanner onCode={handleInvScan} onClose={() => setShowInvScanner(false)} />}
+      {modal && <ProductModal
+        product={modal === "new" ? null : modal}
+        onSave={handleSave}
+        onClose={() => { setModal(null); setScanBarcode(""); }}
+        categories={categories}
+        prefillBarcode={modal === "new" ? scanBarcode : ""}
+      />}
       {showCats && <CategoriesModal categories={categories} onClose={() => setShowCats(false)} />}
       <div className="inv-area">
         {importMsg && (
@@ -2202,6 +2247,14 @@ function InventoryView({ products, userProfile, categories }) {
                 </div>
               )}
             </div>
+          )}
+          {canEdit && (
+            <button className="btn-add"
+              style={{ background: "#252b3b", border: "1px solid #3a4158", color: "#e5e7eb" }}
+              onClick={() => setShowInvScanner(true)}
+              title="Escanear código de barras">
+              📷
+            </button>
           )}
           {canEdit && <button className="btn-add" onClick={() => setModal("new")}>+ Nuevo</button>}
         </div>
