@@ -7,7 +7,7 @@ import {
 import { db, auth, storage } from "./firebase";
 import {
   collection, doc, onSnapshot, setDoc, deleteDoc, addDoc,
-  serverTimestamp, query, orderBy, updateDoc, getDocs, getDoc
+  serverTimestamp, query, orderBy, updateDoc, getDocs, getDoc, writeBatch
 } from "firebase/firestore";
 import {
   createUserWithEmailAndPassword, signInWithEmailAndPassword,
@@ -2147,6 +2147,41 @@ function InventoryView({ products, userProfile, categories }) {
     setJsonMenu(false);
   };
 
+  const handleExportAndClear = async () => {
+    setJsonMenu(false);
+    if (!confirm(`¿Borrar los ${products.length} productos del inventario?\n\nSe guardará una copia de seguridad en el servidor antes de borrar.`)) return;
+
+    // 1. Save backup on the server (outside the app files)
+    const data = products.map(({ id: _id, ...p }) => p);
+    try {
+      const res = await fetch("/api/backup-inventory", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ products: data, localId }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error ?? "Error al guardar backup");
+      const { file, count } = await res.json();
+      console.info(`Backup guardado: ${file} (${count} productos)`);
+    } catch (err) {
+      alert(`No se pudo guardar el backup en el servidor:\n${err instanceof Error ? err.message : err}\n\nSe cancela el borrado.`);
+      return;
+    }
+
+    // 2. Delete all products from Firestore in batches of 500
+    try {
+      const snap = await getDocs(collection(db, "locals", localId, "products"));
+      const docs = snap.docs;
+      for (let i = 0; i < docs.length; i += 500) {
+        const batch = writeBatch(db);
+        docs.slice(i, i + 500).forEach(d => batch.delete(d.ref));
+        await batch.commit();
+      }
+      setImportMsg({ ok: 0, skipped: 0, error: null, cleared: docs.length });
+    } catch (err) {
+      alert(`El backup fue guardado pero ocurrió un error al borrar:\n${err instanceof Error ? err.message : err}`);
+    }
+  };
+
   const handleImport = async (e) => {
     const file = e.target.files?.[0];
     e.target.value = "";            // reset so same file can be picked again
@@ -2219,7 +2254,9 @@ function InventoryView({ products, userProfile, categories }) {
             <span>
               {importMsg.error
                 ? `❌ Error: ${importMsg.error}`
-                : `✅ ${importMsg.ok} producto${importMsg.ok !== 1 ? "s" : ""} importado${importMsg.ok !== 1 ? "s" : ""}${importMsg.skipped ? ` · ${importMsg.skipped} omitido${importMsg.skipped !== 1 ? "s" : ""} (código ya existe)` : ""}`}
+                : importMsg.cleared != null
+                  ? `🗑️ Inventario borrado (${importMsg.cleared} producto${importMsg.cleared !== 1 ? "s" : ""}). Backup guardado en el servidor.`
+                  : `✅ ${importMsg.ok} producto${importMsg.ok !== 1 ? "s" : ""} importado${importMsg.ok !== 1 ? "s" : ""}${importMsg.skipped ? ` · ${importMsg.skipped} omitido${importMsg.skipped !== 1 ? "s" : ""} (código ya existe)` : ""}`}
             </span>
             <button onClick={() => setImportMsg(null)}
               style={{ background: "none", border: "none", color: "inherit", cursor: "pointer", fontSize: 16, lineHeight: 1 }}>✕</button>
@@ -2243,6 +2280,10 @@ function InventoryView({ products, userProfile, categories }) {
                   </button>
                   <button className="json-menu-item" onClick={handleExport}>
                     📤 Exportar
+                  </button>
+                  <div style={{ height: 1, background: "#374151", margin: "4px 0" }} />
+                  <button className="json-menu-item" style={{ color: "#f87171" }} onClick={handleExportAndClear}>
+                    🗑️ Exportar y borrar todo
                   </button>
                 </div>
               )}
