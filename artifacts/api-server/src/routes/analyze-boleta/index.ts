@@ -31,6 +31,16 @@ router.post("/analyze-boleta", async (req, res) => {
   }
 
   try {
+    // Fetch the file and convert to base64 (proxy requires base64, not URL sources)
+    const fileRes = await fetch(url);
+    if (!fileRes.ok) {
+      res.write(`data: ${JSON.stringify({ error: `No se pudo descargar el archivo (${fileRes.status})` })}\n\n`);
+      res.end();
+      return;
+    }
+    const arrayBuf = await fileRes.arrayBuffer();
+    const base64Data = Buffer.from(arrayBuf).toString("base64");
+
     const prompt = `Analizás un documento comercial (${type ?? "boleta"} de "${name ?? "proveedor"}", referencia de fecha ${date ?? "no especificada"}).
 
 Extraé dos cosas únicamente:
@@ -53,9 +63,16 @@ REGLAS ESTRICTAS:
     const contentBlocks: any[] = [];
 
     if (isImage) {
-      contentBlocks.push({ type: "image", source: { type: "url", url } });
+      contentBlocks.push({
+        type: "image",
+        source: { type: "base64", media_type: mimeType as any, data: base64Data },
+      });
     } else {
-      contentBlocks.push({ type: "document", source: { type: "url", url } });
+      // PDF as base64 document block
+      contentBlocks.push({
+        type: "document",
+        source: { type: "base64", media_type: "application/pdf" as any, data: base64Data },
+      });
     }
     contentBlocks.push({ type: "text", text: prompt });
 

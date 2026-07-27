@@ -50,27 +50,38 @@ Las imágenes de los documentos están adjuntas en el mensaje. Usálas para resp
 
         const contentBlocks: any[] = [];
 
-        // Attach image documents as vision blocks
+        // Helper: fetch URL → base64
+        const toBase64 = async (u: string) => {
+          const r = await fetch(u);
+          if (!r.ok) return null;
+          return Buffer.from(await r.arrayBuffer()).toString("base64");
+        };
+
+        // Attach image documents as vision blocks (base64)
         for (const doc of imgDocs) {
+          const data = await toBase64(doc.url);
+          if (!data) continue;
           contentBlocks.push({
             type: "text",
             text: `📋 ${doc.type} — ${doc.name || "Sin nombre"} — ${doc.date}:`,
           });
           contentBlocks.push({
             type: "image",
-            source: { type: "url", url: doc.url },
+            source: { type: "base64", media_type: doc.mimeType as any, data },
           });
         }
 
-        // Attach PDF documents as document blocks
+        // Attach PDF documents as document blocks (base64)
         for (const doc of pdfDocs) {
+          const data = await toBase64(doc.url);
+          if (!data) continue;
           contentBlocks.push({
             type: "text",
             text: `📄 ${doc.type} — ${doc.name || "Sin nombre"} — ${doc.date} (PDF):`,
           });
           contentBlocks.push({
             type: "document",
-            source: { type: "url", url: doc.url },
+            source: { type: "base64", media_type: "application/pdf" as any, data },
           });
         }
 
@@ -79,20 +90,14 @@ Las imágenes de los documentos están adjuntas en el mensaje. Usálas para resp
       }),
     );
 
-    const hasPdfs = pdfDocs.length > 0;
     const streamParams: any = {
       model: "claude-sonnet-4-6",
       max_tokens: 1024,
       system,
       messages: apiMessages,
     };
-    if (hasPdfs) {
-      streamParams.betas = ["pdfs-2024-09-25"];
-    }
 
-    const stream = hasPdfs
-      ? anthropic.beta.messages.stream(streamParams)
-      : anthropic.messages.stream(streamParams);
+    const stream = anthropic.messages.stream(streamParams);
 
     for await (const event of stream as any) {
       if (
