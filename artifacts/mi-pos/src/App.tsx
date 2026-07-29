@@ -3275,6 +3275,24 @@ async function logActivity(localId, userProfile, type, action, details) {
   } catch (_) { /* silencioso — no bloquea la acción principal */ }
 }
 
+// ─── EntryForm (fuera de ArqueoView para evitar recreación en cada render) ────
+function EntryForm({ desc, setDesc, amount, setAmount, saving, onAdd }) {
+  return (
+    <div style={{ background:"#1e2438", border:"1px solid #3a4158", borderRadius:8, padding:10, marginBottom:10 }}>
+      <input className="modal-input" placeholder="Descripción" value={desc}
+        onChange={e => setDesc(e.target.value)} style={{ marginBottom:6 }} />
+      <div style={{ display:"flex", gap:8 }}>
+        <input className="modal-input" type="number" min="0" placeholder="Monto"
+          value={amount} onChange={e => setAmount(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && onAdd()}
+          style={{ fontFamily:"monospace" }} />
+        <button className="btn-primary" style={{ flex:"0 0 auto", padding:"9px 16px" }}
+          disabled={saving} onClick={onAdd}>✓</button>
+      </div>
+    </div>
+  );
+}
+
 // ─── ArqueoView ───────────────────────────────────────────────────────────────
 function ArqueoView({ userProfile }) {
   const localId = useContext(LocalCtx);
@@ -3399,21 +3417,6 @@ function ArqueoView({ userProfile }) {
   const totalCompras = (session.compras || []).reduce((s, e) => s + e.amount, 0);
   const efectivo     = (session.initialAmount || 0) + totalVentas - totalGastos - totalCompras;
 
-  const EntryForm = ({ color, onAdd }) => (
-    <div style={{ background:"#1e2438", border:"1px solid #3a4158", borderRadius:8, padding:10, marginBottom:10 }}>
-      <input className="modal-input" placeholder="Descripción" value={entryDesc}
-        onChange={e => setEntryDesc(e.target.value)} style={{ marginBottom:6 }} />
-      <div style={{ display:"flex", gap:8 }}>
-        <input className="modal-input" type="number" min="0" placeholder="Monto"
-          value={entryAmount} onChange={e => setEntryAmount(e.target.value)}
-          onKeyDown={e => e.key === "Enter" && onAdd()}
-          style={{ fontFamily:"monospace" }} />
-        <button className="btn-primary" style={{ flex:"0 0 auto", padding:"9px 16px" }}
-          disabled={saving} onClick={onAdd}>✓</button>
-      </div>
-    </div>
-  );
-
   return (
     <div className="content">
       <div className="arqueo-wrap">
@@ -3452,7 +3455,7 @@ function ArqueoView({ userProfile }) {
               {showGastoForm ? "Cancelar" : "+ Agregar"}
             </button>
           </div>
-          {showGastoForm && <EntryForm color="#f87171" onAdd={() => addEntry("gasto")} />}
+          {showGastoForm && <EntryForm desc={entryDesc} setDesc={setEntryDesc} amount={entryAmount} setAmount={setEntryAmount} saving={saving} onAdd={() => addEntry("gasto")} />}
           {(session.gastos||[]).length === 0 && !showGastoForm
             ? <div style={{ color:"#6b7280", fontSize:12 }}>Sin gastos registrados</div>
             : (session.gastos||[]).map(e => (
@@ -3474,7 +3477,7 @@ function ArqueoView({ userProfile }) {
               {showCompraForm ? "Cancelar" : "+ Agregar"}
             </button>
           </div>
-          {showCompraForm && <EntryForm color="#fb923c" onAdd={() => addEntry("compra")} />}
+          {showCompraForm && <EntryForm desc={entryDesc} setDesc={setEntryDesc} amount={entryAmount} setAmount={setEntryAmount} saving={saving} onAdd={() => addEntry("compra")} />}
           {(session.compras||[]).length === 0 && !showCompraForm
             ? <div style={{ color:"#6b7280", fontSize:12 }}>Sin compras registradas</div>
             : (session.compras||[]).map(e => (
