@@ -3266,10 +3266,11 @@ function ArqueoView({ userProfile }) {
   // Escuchar el arqueo abierto del local actual
   useEffect(() => {
     if (!localId) return;
+    // where + orderBy en campos distintos requiere índice compuesto en Firestore.
+    // Como solo puede haber un arqueo abierto a la vez, alcanza con where + limit.
     const q = query(
       collection(db, "locals", localId, "arqueos"),
       where("status", "==", "open"),
-      orderBy("openedAt", "desc"),
       limit(1)
     );
     const unsub = onSnapshot(q, snap => {
