@@ -1885,14 +1885,38 @@ function SaleView({ products, userProfile, categories, localName }) {
     setCart([]);
     setPayModal(false);
 
-    // 3. Actualizar stock de todos los productos en paralelo en el fondo
-    const stockSnapshot = cart; // captura el carrito antes de que se limpie
-    Promise.all(
-      stockSnapshot.map(item => {
+    // 3. Actualizar stock + arqueo abierto en paralelo en el fondo
+    const stockSnapshot = cart;
+    Promise.all([
+      // stock
+      ...stockSnapshot.map(item => {
         const newStock = Math.max(0, (item.stock || 0) - item.qty);
         return updateDoc(doc(db, "locals", localId, "products", item.id), { stock: newStock });
-      })
-    ).catch(() => {/* onSnapshot resincroniza si alguna falla */});
+      }),
+      // arqueo: sumar la venta si hay caja abierta
+      (async () => {
+        try {
+          const q = query(
+            collection(db, "locals", localId, "arqueos"),
+            where("status", "==", "open"),
+            limit(1)
+          );
+          const snap = await getDocs(q);
+          if (!snap.empty) {
+            const arqueoRef = snap.docs[0].ref;
+            const currentVentas = snap.docs[0].data().ventas || [];
+            await updateDoc(arqueoRef, {
+              ventas: [...currentVentas, {
+                id: saleRef.id,
+                amount: total,
+                method,
+                createdAt: new Date().toISOString(),
+              }],
+            });
+          }
+        } catch (_) { /* silencioso */ }
+      })(),
+    ]).catch(() => {});
   };
 
   const getCatEmoji = (cat) => ({ "Lácteos": "🥛", "Bebidas": "🥤", "Higiene": "🧴", "Limpieza": "🧹", "Frutas y Verd.": "🥦", "Snacks": "🍪", "Enlatados": "🥫", "Panadería": "🍞" }[cat] || "📦");
@@ -3370,9 +3394,10 @@ function ArqueoView({ userProfile }) {
   );
 
   /* ── Sesión abierta ── */
+  const totalVentas  = (session.ventas  || []).reduce((s, e) => s + e.amount, 0);
   const totalGastos  = (session.gastos  || []).reduce((s, e) => s + e.amount, 0);
   const totalCompras = (session.compras || []).reduce((s, e) => s + e.amount, 0);
-  const efectivo     = (session.initialAmount || 0) - totalGastos - totalCompras;
+  const efectivo     = (session.initialAmount || 0) + totalVentas - totalGastos - totalCompras;
 
   const EntryForm = ({ color, onAdd }) => (
     <div style={{ background:"#1e2438", border:"1px solid #3a4158", borderRadius:8, padding:10, marginBottom:10 }}>
@@ -3401,11 +3426,15 @@ function ArqueoView({ userProfile }) {
             <span className="arqueo-stat-value" style={{ color:"#00c896" }}>{fmt(session.initialAmount || 0)}</span>
           </div>
           <div className="arqueo-stat">
-            <span className="arqueo-stat-label">📤 Total gastos</span>
+            <span className="arqueo-stat-label">🧾 Ventas ({(session.ventas||[]).length})</span>
+            <span className="arqueo-stat-value" style={{ color:"#34d399" }}>+{fmt(totalVentas)}</span>
+          </div>
+          <div className="arqueo-stat">
+            <span className="arqueo-stat-label">📤 Gastos ({(session.gastos||[]).length})</span>
             <span className="arqueo-stat-value" style={{ color:"#f87171" }}>−{fmt(totalGastos)}</span>
           </div>
           <div className="arqueo-stat">
-            <span className="arqueo-stat-label">🛒 Total compras</span>
+            <span className="arqueo-stat-label">🛒 Compras ({(session.compras||[]).length})</span>
             <span className="arqueo-stat-value" style={{ color:"#fb923c" }}>−{fmt(totalCompras)}</span>
           </div>
           <div className="arqueo-stat" style={{ marginTop:4 }}>
