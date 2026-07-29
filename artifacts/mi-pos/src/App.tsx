@@ -3200,7 +3200,7 @@ function MigrationSection() {
   );
 }
 
-function PermissionsView() {
+function PermissionsView({ locals }: { locals: { id: string; name: string }[] }) {
   const [users, setUsers] = useState([]);
   useEffect(() => {
     const unsub = onSnapshot(collection(db, "users"), snap => {
@@ -3240,7 +3240,7 @@ function PermissionsView() {
                 onChange={e => assignLocal(u.id, e.target.value)}
                 style={{ background: "#252b3b", border: "1px solid #3a4158", borderRadius: 6, color: "#e8eaf0", padding: "4px 8px", fontSize: 12, cursor: "pointer" }}
               >
-                {LOCALS.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                {locals.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
               </select>
             </div>
             {perms.map(p => (
@@ -4126,7 +4126,7 @@ export default function App() {
           {view === "inventory" && <InventoryView products={products} userProfile={userProfile} categories={categories} />}
           {view === "history"   && <HistoryView sales={sales} />}
           {view === "reports"   && <ReportsView sales={sales} products={products} />}
-          {view === "perms"     && <PermissionsView />}
+          {view === "perms"     && <PermissionsView locals={locals} />}
           {view === "ai" && canUseAI && <AIChat products={products} sales={sales} userProfile={userProfile} />}
           {view === "docs"      && <DocsView userProfile={userProfile} />}
           {view === "settings"  && <SettingsView userProfile={userProfile} />}
