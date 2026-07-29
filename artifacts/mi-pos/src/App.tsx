@@ -67,10 +67,18 @@ const css = `
   .local-selector { position: relative; display: flex; align-items: center; gap: 2px; background: #1e3a2f; border: 1px solid #00c89644; border-radius: 8px; padding: 4px 8px; cursor: pointer; font-size: 12px; color: #00c896; font-weight: 600; user-select: none; flex-shrink: 0; }
   .local-selector:hover { background: #1e4a3a; }
   .local-selector-label { white-space: nowrap; max-width: 110px; overflow: hidden; text-overflow: ellipsis; }
-  .local-dropdown { position: absolute; top: calc(100% + 4px); left: 0; min-width: 160px; background: #1e2438; border: 1px solid #2a3045; border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.4); z-index: 200; overflow: hidden; }
+  .local-dropdown { position: absolute; top: calc(100% + 4px); left: 0; min-width: 180px; background: #1e2438; border: 1px solid #2a3045; border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.4); z-index: 200; overflow: hidden; }
   .local-option { padding: 10px 14px; font-size: 13px; color: #c9cdd6; cursor: pointer; transition: background .1s; }
   .local-option:hover { background: #252b3b; }
   .local-option.active { color: #00c896; background: #1e3a2f; font-weight: 700; }
+  .local-manage-btn { width: 100%; text-align: left; background: none; border: none; border-top: 1px solid #2a3045; padding: 9px 14px; font-size: 12px; color: #60a5fa; cursor: pointer; font-family: 'Inter', sans-serif; }
+  .local-manage-btn:hover { background: #1e2a4a; }
+  /* Manage locals modal */
+  .manage-locals-row { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px solid #2a3045; }
+  .manage-locals-input { flex: 1; background: #141824; border: 1px solid #3a4158; border-radius: 6px; padding: 6px 10px; color: #e8eaf0; font-size: 13px; font-family: 'Inter', sans-serif; }
+  .manage-locals-input:focus { outline: none; border-color: #00c896; }
+  .manage-locals-save { background: #00c896; border: none; border-radius: 6px; padding: 6px 12px; color: #0d1117; font-size: 12px; font-weight: 700; cursor: pointer; font-family: 'Inter', sans-serif; white-space: nowrap; }
+  .manage-locals-save:disabled { opacity: .4; cursor: default; }
   .local-badge { font-size: 11px; color: #60a5fa; background: #1e2a4a; border: 1px solid #3a5168; border-radius: 8px; padding: 3px 8px; white-space: nowrap; flex-shrink: 0; }
   .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: #141824; border-top: 1px solid #2a3045; z-index: 50; display: flex; justify-content: space-around; padding: 6px 0 10px; }
   .bn-btn { display: flex; flex-direction: column; align-items: center; gap: 2px; background: none; border: none; color: #6b7280; font-size: 10px; cursor: pointer; padding: 4px 10px; font-family: 'Inter', sans-serif; }
@@ -3822,6 +3830,91 @@ function DocsView({ userProfile }) {
   );
 }
 
+// ─── Manage Locals Modal ───────────────────────────────────────────────────────
+function ManageLocalsModal({ locals, onClose }: { locals: { id: string; name: string }[]; onClose: () => void }) {
+  const [names, setNames] = useState<Record<string, string>>(() =>
+    Object.fromEntries(locals.map(l => [l.id, l.name]))
+  );
+  const [saving, setSaving] = useState<string | null>(null);
+  const [newName, setNewName] = useState("");
+  const [adding, setAdding]   = useState(false);
+
+  const saveRename = async (id: string) => {
+    const trimmed = names[id]?.trim();
+    if (!trimmed) return;
+    setSaving(id);
+    try {
+      const list = locals.map(l => ({ id: l.id, name: l.id === id ? trimmed : (names[l.id]?.trim() || l.name) }));
+      await setDoc(doc(db, "config", "locals"), { list });
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const addLocal = async () => {
+    const trimmed = newName.trim();
+    if (!trimmed) return;
+    setAdding(true);
+    try {
+      const id = "local-" + trimmed.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "") + "-" + Date.now().toString(36);
+      const list = [...locals.map(l => ({ id: l.id, name: names[l.id]?.trim() || l.name })), { id, name: trimmed }];
+      await setDoc(doc(db, "config", "locals"), { list });
+      setNewName("");
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-box" onClick={e => e.stopPropagation()} style={{ maxWidth: 360 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+          <span style={{ fontWeight: 700, fontSize: 15 }}>🏪 Gestionar locales</span>
+          <button onClick={onClose} style={{ background: "none", border: "none", color: "#6b7280", fontSize: 18, cursor: "pointer" }}>✕</button>
+        </div>
+
+        {locals.map(l => (
+          <div key={l.id} className="manage-locals-row">
+            <input
+              className="manage-locals-input"
+              value={names[l.id] ?? l.name}
+              onChange={e => setNames(n => ({ ...n, [l.id]: e.target.value }))}
+              onKeyDown={e => e.key === "Enter" && saveRename(l.id)}
+            />
+            <button
+              className="manage-locals-save"
+              disabled={saving === l.id || (names[l.id]?.trim() || l.name) === l.name}
+              onClick={() => saveRename(l.id)}
+            >
+              {saving === l.id ? "…" : "Guardar"}
+            </button>
+          </div>
+        ))}
+
+        <div style={{ marginTop: 18, borderTop: "1px solid #2a3045", paddingTop: 14 }}>
+          <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>Agregar nuevo local</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              className="manage-locals-input"
+              placeholder="Nombre del local"
+              value={newName}
+              onChange={e => setNewName(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && addLocal()}
+            />
+            <button
+              className="manage-locals-save"
+              disabled={adding || !newName.trim()}
+              onClick={addLocal}
+            >
+              {adding ? "…" : "+ Agregar"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [userProfile, setUserProfile] = useState(null);
@@ -3835,6 +3928,8 @@ export default function App() {
   const [categories, setCategories] = useState(CATEGORIES.filter(c => c !== "Todas"));
   const [activeLocal, setActiveLocal] = useState(() => localStorage.getItem("mi-pos-active-local") || "local1");
   const [localMenuOpen, setLocalMenuOpen] = useState(false);
+  const [locals, setLocals] = useState(LOCALS);
+  const [showManageLocals, setShowManageLocals] = useState(false);
 
   useEffect(() => {
     // Timeout fallback: if Firebase doesn't respond in 8s, stop loading
@@ -3942,6 +4037,20 @@ export default function App() {
     return unsub;
   }, [user, effectiveLocal]);
 
+  // Load locals list from Firestore (real-time); seed from hardcoded list if first run
+  useEffect(() => {
+    if (!user) return;
+    const unsub = onSnapshot(doc(db, "config", "locals"), (snap) => {
+      if (snap.exists()) {
+        const list = snap.data().list;
+        if (Array.isArray(list) && list.length > 0) setLocals(list);
+      } else {
+        setDoc(doc(db, "config", "locals"), { list: LOCALS });
+      }
+    });
+    return unsub;
+  }, [user]);
+
   if (authLoading) return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "#1a1f2e", color: "#00c896", gap: 12 }}>
       <div style={{ fontSize: 36 }}>🛒</div>
@@ -3954,7 +4063,7 @@ export default function App() {
   const perms = userProfile?.permissions || {};
 
   const canUseAI = isOwner || perms.sell || perms.viewReports || perms.viewInventory;
-  const activeLocalName = LOCALS.find(l => l.id === effectiveLocal)?.name || effectiveLocal;
+  const activeLocalName = locals.find(l => l.id === effectiveLocal)?.name || effectiveLocal;
 
   const navItems = [
     { id: "sale",      icon: "🛒", label: "Venta",      show: perms.sell || isOwner },
@@ -3984,6 +4093,7 @@ export default function App() {
   return (
     <LocalCtx.Provider value={effectiveLocal}>
       <style>{css}</style>
+      {showManageLocals && <ManageLocalsModal locals={locals} onClose={() => setShowManageLocals(false)} />}
       <div className="app" onClick={() => localMenuOpen && setLocalMenuOpen(false)}>
         <div className="top-header">
           <div className="logo">PV</div>
@@ -3994,11 +4104,14 @@ export default function App() {
               <span style={{ fontSize: 10, marginLeft: 2 }}>▾</span>
               {localMenuOpen && (
                 <div className="local-dropdown">
-                  {LOCALS.map(l => (
+                  {locals.map(l => (
                     <div key={l.id} className={`local-option${effectiveLocal === l.id ? " active" : ""}`} onClick={() => switchLocal(l.id)}>
                       {effectiveLocal === l.id ? "✓ " : ""}{l.name}
                     </div>
                   ))}
+                  <button className="local-manage-btn" onClick={e => { e.stopPropagation(); setLocalMenuOpen(false); setShowManageLocals(true); }}>
+                    ✏️ Gestionar locales
+                  </button>
                 </div>
               )}
             </div>
