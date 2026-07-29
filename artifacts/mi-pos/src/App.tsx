@@ -14,6 +14,11 @@ import {
   onAuthStateChanged, signOut
 } from "firebase/auth";
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
+import { Capacitor, registerPlugin } from "@capacitor/core";
+
+// Plugin nativo de impresión TCP (solo activo en la APK)
+const TcpPrint = registerPlugin("TcpPrint");
+const IS_NATIVE = Capacitor.isNativePlatform();
 
 const CATEGORIES = ["Todas", "Lácteos", "Básicos", "Aceites", "Panadería", "Snacks", "Enlatados", "Bebidas", "Frutas y Verd.", "Higiene", "Limpieza"];
 const fmt = (n) => `$${Number(n).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -1619,8 +1624,13 @@ function PrintOptionsModal({ sale, bizName, userProfile, onClose }) {
   const [locations, setLocations] = useState([]);
   const [selLocId, setSelLocId]   = useState(() => localStorage.getItem("mi-pos-printer-location-id") || "");
   const wifiPrinter = useWifiPrinter();
-  const wifiSt  = wifiPrinter.status;
-  const wifiErr = wifiPrinter.errMsg;
+
+  // Estado nativo (APK) — se usa en lugar del WebSocket proxy cuando IS_NATIVE
+  const [nativeSt,  setNativeSt]  = useState("idle");
+  const [nativeErr, setNativeErr] = useState("");
+
+  const wifiSt  = IS_NATIVE ? nativeSt  : wifiPrinter.status;
+  const wifiErr = IS_NATIVE ? nativeErr : wifiPrinter.errMsg;
   const [btSt, setBtSt]       = useState("idle");
   const [btErr, setBtErr]     = useState("");
   // buildEscPos devuelve base64 directamente
@@ -1656,12 +1666,34 @@ function PrintOptionsModal({ sale, bizName, userProfile, onClose }) {
     setSelLocId(id);
     localStorage.setItem("mi-pos-printer-location-id", id);
     wifiPrinter.reset();
+    setNativeSt("idle"); setNativeErr("");
   };
 
   const tryWifi = async () => {
     if (["printing","connecting","ok"].includes(wifiSt)) return;
     const bytes = Uint8Array.from(atob(ticketB64), c => c.charCodeAt(0));
-    await wifiPrinter.print(bytes);
+
+    if (IS_NATIVE) {
+      // APK: socket TCP directo, sin proxy
+      const rawIp = selLoc?.rawIp?.trim();
+      const tcpPort = parseInt(selLoc?.tcpPort) || 9100;
+      if (!rawIp) {
+        setNativeSt("error");
+        setNativeErr("Configurá la IP de la impresora en Ajustes → \"IP TCP\".");
+        return;
+      }
+      setNativeSt("printing");
+      try {
+        await TcpPrint.print({ ip: rawIp, port: tcpPort, data: Array.from(bytes) });
+        setNativeSt("ok");
+      } catch (err) {
+        setNativeSt("error");
+        setNativeErr(err.message || "Error al conectar con la impresora");
+      }
+    } else {
+      // Web: WebSocket → proxy TCP
+      await wifiPrinter.print(bytes);
+    }
   };
 
   const tryBluetooth = async () => {
@@ -1737,9 +1769,11 @@ function PrintOptionsModal({ sale, bizName, userProfile, onClose }) {
           <div className="print-section-head">
             <span className="print-section-icon">🌐</span>
             <div style={{ flex: 1 }}>
-              <div className="print-section-title">WiFi</div>
+              <div className="print-section-title">WiFi {IS_NATIVE ? "(TCP directo)" : "(proxy)"}</div>
               <div className="print-section-sub">
-                {selLoc ? selLoc.name : printerIp}
+                {IS_NATIVE
+                  ? (selLoc?.rawIp ? `${selLoc.rawIp}:${selLoc.tcpPort || 9100}` : "Sin IP TCP configurada")
+                  : (selLoc ? selLoc.name : printerIp)}
               </div>
             </div>
             <span style={{ fontSize: 18 }}>{stIcon(wifiSt)}</span>
@@ -1750,7 +1784,7 @@ function PrintOptionsModal({ sale, bizName, userProfile, onClose }) {
               onChange={e => pickLoc(e.target.value)}
               disabled={wifiBusy || wifiSt === "ok"}>
               {locations.map(l => (
-                <option key={l.id} value={l.id}>{l.name} — {l.ip}</option>
+                <option key={l.id} value={l.id}>{l.name} — {IS_NATIVE ? (l.rawIp || "sin IP TCP") : l.ip}</option>
               ))}
             </select>
           )}
@@ -3742,13 +3776,17 @@ function PermissionsView({ locals }: { locals: { id: string; name: string }[] })
 
 // ─── LocationCard ─────────────────────────────────────────────────────────────
 function LocationCard({ loc, onChange, onDelete }) {
-  const [name, setName] = useState(loc.name);
-  const [ip,   setIp]   = useState(loc.ip);
+  const [name,    setName]    = useState(loc.name);
+  const [ip,      setIp]      = useState(loc.ip);
+  const [rawIp,   setRawIp]   = useState(loc.rawIp || "");
+  const [tcpPort, setTcpPort] = useState(loc.tcpPort || "9100");
   const [testSt, setTestSt]   = useState("idle");
   const [testMsg, setTestMsg] = useState("");
 
-  useEffect(() => { setName(loc.name); }, [loc.name]);
-  useEffect(() => { setIp(loc.ip); },   [loc.ip]);
+  useEffect(() => { setName(loc.name); },          [loc.name]);
+  useEffect(() => { setIp(loc.ip); },              [loc.ip]);
+  useEffect(() => { setRawIp(loc.rawIp || ""); },  [loc.rawIp]);
+  useEffect(() => { setTcpPort(String(loc.tcpPort || "9100")); }, [loc.tcpPort]);
 
   const runFetch = async (fn) => {
     setTestSt("testing"); setTestMsg("");
@@ -3798,7 +3836,23 @@ function LocationCard({ loc, onChange, onDelete }) {
       <input className="modal-input" value={ip}
         onChange={e => setIp(e.target.value)}
         onBlur={() => { if (ip.trim() && ip !== loc.ip) onChange("ip", ip.trim()); }}
-        placeholder="http://10.0.0.100:3000" />
+        placeholder="http://10.0.0.100:3000 (proxy web)" />
+
+      {/* Campos TCP directo — para la APK nativa */}
+      <div style={{ display:"flex", gap:6, marginTop:6 }}>
+        <input className="modal-input" value={rawIp} style={{ flex:2 }}
+          onChange={e => setRawIp(e.target.value)}
+          onBlur={() => { if (rawIp !== (loc.rawIp || "")) onChange("rawIp", rawIp.trim()); }}
+          placeholder="IP TCP ej: 192.168.1.50" />
+        <input className="modal-input" value={tcpPort} style={{ flex:1, fontFamily:"monospace" }}
+          onChange={e => setTcpPort(e.target.value)}
+          onBlur={() => { const p = parseInt(tcpPort) || 9100; if (p !== (loc.tcpPort || 9100)) onChange("tcpPort", p); }}
+          placeholder="9100" />
+      </div>
+      <div style={{ fontSize:10, color:"#6b7280", marginTop:3 }}>
+        IP TCP y puerto se usan en la APK nativa (sin proxy)
+      </div>
+
       <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
         <button className="btn-secondary"
           style={{ flex: 1, fontSize: 12, padding: "6px 4px", opacity: testSt === "testing" ? 0.6 : 1 }}
@@ -3819,9 +3873,9 @@ function LocationCard({ loc, onChange, onDelete }) {
 
 // ─── SettingsView ─────────────────────────────────────────────────────────────
 const PRINTER_DEFAULT_LOCS = [
-  { id: "casa",   name: "Casa",       ip: "http://10.0.0.100:3000" },
-  { id: "local1", name: "Local 1",    ip: "http://10.0.0.101:3000" },
-  { id: "godoy",  name: "Godoy Cruz", ip: "http://10.0.0.102:3000" },
+  { id: "casa",   name: "Casa",       ip: "http://10.0.0.100:3000", rawIp: "", tcpPort: 9100 },
+  { id: "local1", name: "Local 1",    ip: "http://10.0.0.101:3000", rawIp: "", tcpPort: 9100 },
+  { id: "godoy",  name: "Godoy Cruz", ip: "http://10.0.0.102:3000", rawIp: "", tcpPort: 9100 },
 ];
 
 function SettingsView({ userProfile }) {
@@ -3829,9 +3883,11 @@ function SettingsView({ userProfile }) {
   const [locations, setLocations] = useState([]);
   const [loading, setLoading]     = useState(true);
   const [saving,  setSaving]      = useState(false);
-  const [showAdd, setShowAdd]     = useState(false);
-  const [newName, setNewName]     = useState("");
-  const [newIp,   setNewIp]       = useState("http://");
+  const [showAdd,    setShowAdd]    = useState(false);
+  const [newName,    setNewName]    = useState("");
+  const [newIp,      setNewIp]      = useState("http://");
+  const [newRawIp,   setNewRawIp]   = useState("");
+  const [newTcpPort, setNewTcpPort] = useState("9100");
   const saveRef = useRef(null);
 
   useEffect(() => {
@@ -3874,11 +3930,17 @@ function SettingsView({ userProfile }) {
 
   const addLoc = async () => {
     if (!newName.trim() || !newIp.trim()) return;
-    const newLoc = { id: Date.now().toString(36), name: newName.trim(), ip: newIp.trim() };
+    const newLoc = {
+      id: Date.now().toString(36),
+      name: newName.trim(),
+      ip: newIp.trim(),
+      rawIp: newRawIp.trim(),
+      tcpPort: parseInt(newTcpPort) || 9100,
+    };
     const updated = [...locations, newLoc];
     setLocations(updated);
     await persist(updated);
-    setNewName(""); setNewIp("http://"); setShowAdd(false);
+    setNewName(""); setNewIp("http://"); setNewRawIp(""); setNewTcpPort("9100"); setShowAdd(false);
   };
 
   return (
@@ -3911,18 +3973,25 @@ function SettingsView({ userProfile }) {
                   <div className="modal-label">Nombre de la ubicación</div>
                   <input className="modal-input" value={newName} autoFocus
                     onChange={e => setNewName(e.target.value)}
-                    onKeyDown={e => e.key === "Enter" && addLoc()}
                     placeholder="Casa, Depósito, Oficina…" />
-                  <div className="modal-label" style={{ marginTop: 10 }}>IP del servidor</div>
+                  <div className="modal-label" style={{ marginTop: 10 }}>IP del servidor (proxy web)</div>
                   <input className="modal-input" value={newIp}
                     onChange={e => setNewIp(e.target.value)}
-                    onKeyDown={e => e.key === "Enter" && addLoc()}
                     placeholder="http://192.168.1.50:3000" />
+                  <div className="modal-label" style={{ marginTop: 10 }}>IP TCP de impresora (APK nativa)</div>
+                  <div style={{ display:"flex", gap:6 }}>
+                    <input className="modal-input" value={newRawIp} style={{ flex:2 }}
+                      onChange={e => setNewRawIp(e.target.value)}
+                      placeholder="192.168.1.50" />
+                    <input className="modal-input" value={newTcpPort} style={{ flex:1, fontFamily:"monospace" }}
+                      onChange={e => setNewTcpPort(e.target.value)}
+                      placeholder="9100" />
+                  </div>
                   <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
                     <button className="btn-primary" style={{ flex: 1 }} onClick={addLoc}
                       disabled={!newName.trim() || !newIp.trim()}>Guardar</button>
                     <button className="btn-secondary" style={{ flex: 1 }} onClick={() => {
-                      setShowAdd(false); setNewName(""); setNewIp("http://");
+                      setShowAdd(false); setNewName(""); setNewIp("http://"); setNewRawIp(""); setNewTcpPort("9100");
                     }}>Cancelar</button>
                   </div>
                 </div>
@@ -3939,10 +4008,9 @@ function SettingsView({ userProfile }) {
         <div className="settings-section">
           <div className="settings-section-title">ℹ️ Cómo funciona</div>
           <div style={{ fontSize: 12, color: "#9ca3af", lineHeight: 1.7 }}>
-            Cada ubicación tiene su propia IP. Al imprimir podés elegir desde qué ubicación enviarlo.<br /><br />
-            <strong style={{ color: "#e8eaf0" }}>WiFi:</strong> el servidor debe aceptar{" "}
-            <code style={{ background: "#252b3b", padding: "1px 5px", borderRadius: 3 }}>POST /imprimir</code>{" "}
-            con <code style={{ background: "#252b3b", padding: "1px 5px", borderRadius: 3 }}>{`{"ticket":"base64"}`}</code>.<br /><br />
+            Cada ubicación tiene su propia configuración. Al imprimir podés elegir desde qué ubicación enviarlo.<br /><br />
+            <strong style={{ color: "#e8eaf0" }}>APK nativa (recomendado):</strong> completá la <strong style={{ color: "#e8eaf0" }}>IP TCP</strong> con la IP de tu impresora (ej: <code style={{ background: "#252b3b", padding: "1px 5px", borderRadius: 3 }}>192.168.1.50</code>) y puerto <code style={{ background: "#252b3b", padding: "1px 5px", borderRadius: 3 }}>9100</code>. Sin proxy necesario.<br /><br />
+            <strong style={{ color: "#e8eaf0" }}>Web (proxy):</strong> completá la <strong style={{ color: "#e8eaf0" }}>IP del servidor</strong>. Requiere correr <code style={{ background: "#252b3b", padding: "1px 5px", borderRadius: 3 }}>printer-proxy/proxy.js</code> en la PC del local.<br /><br />
             <strong style={{ color: "#e8eaf0" }}>Bluetooth:</strong> imprime directo sin servidor (Chrome Android/Desktop).
           </div>
         </div>

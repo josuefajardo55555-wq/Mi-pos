@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Mi POS</string>
+    <string name="title_activity_main">Mi POS</string>
+    <string name="package_name">com.mipos.app</string>
+    <string name="custom_url_scheme">com.mipos.app</string>
+</resources>
