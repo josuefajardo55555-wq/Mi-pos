@@ -280,6 +280,14 @@ const css = `
   .img-upload { width: 100%; height: 80px; background: #252b3b; border: 2px dashed #3a4158; border-radius: 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; gap: 4px; }
   .img-upload span { font-size: 11px; color: #6b7280; }
   .img-preview { width: 100%; height: 80px; object-fit: cover; border-radius: 8px; cursor: pointer; }
+  .img-picker-btns { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+  .img-picker-btn { background: #252b3b; border: 1px solid #3a4158; border-radius: 8px; color: #c9cdd6; font-size: 12px; font-family: 'Inter',sans-serif; padding: 10px 4px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .img-picker-btn span:first-child { font-size: 22px; }
+  .img-picker-preview { position: relative; width: 100%; }
+  .img-picker-preview img { width: 100%; max-height: 160px; object-fit: contain; border-radius: 8px; background: #fff; display: block; }
+  .img-picker-remove { position: absolute; top: 4px; right: 4px; background: rgba(0,0,0,.6); border: none; border-radius: 50%; width: 26px; height: 26px; color: #fff; font-size: 14px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .img-picker-progress { height: 4px; border-radius: 2px; background: #2a3045; margin: 6px 0; overflow: hidden; }
+  .img-picker-progress-bar { height: 100%; background: linear-gradient(90deg,#00c896,#00a87a); transition: width .2s; }
   .scanner-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.85); display: flex; align-items: flex-end; justify-content: center; z-index: 300; }
   .scanner-box { background: #1e2438; border-radius: 20px 20px 0 0; padding: 18px; width: 100%; max-width: 420px; }
   .scanner-box h2 { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
@@ -734,17 +742,14 @@ function OffModal({ barcode, offName, offBrand, offImg, found, categories, onClo
                 )
             }
 
-            {/* Image — auto-filled from OFF when found, or paste URL manually */}
+            {/* Image — auto-filled from OFF when found, or pick from camera/gallery/URL */}
             <div className="modal-section" style={{ marginBottom: 10 }}>
-              <div className="modal-label">Imagen</div>
-              {imgOk && img && (
-                <img src={img} alt="" onError={() => setImgOk(false)}
-                  style={{ width: "100%", maxHeight: 140, objectFit: "contain",
-                    borderRadius: 8, background: "#fff", marginBottom: 6 }} />
-              )}
-              <input className="modal-input" value={img} placeholder="https://... (pegá URL de imagen)"
-                onChange={e => { setImg(e.target.value); setImgOk(true); }}
-                style={{ fontSize: 11, color: "#9ca3af" }} />
+              <div className="modal-label">Foto</div>
+              <ProductImagePicker
+                productId={null}
+                value={img}
+                onChange={url => { setImg(url); setImgOk(!!url); }}
+              />
             </div>
 
             {/* Barcode — read-only so the user siempre ve qué código se escaneó */}
@@ -1005,6 +1010,134 @@ function CameraScanner({ onCode, onClose }) {
   );
 }
 
+// ─── ProductImagePicker ───────────────────────────────────────────────────────
+// Permite seleccionar foto desde cámara, galería o URL. Sube a Firebase Storage.
+function ProductImagePicker({ productId, value, onChange }) {
+  const localId    = useContext(LocalCtx);
+  const [uploading, setUploading]   = useState(false);
+  const [progress,  setProgress]    = useState(0);
+  const [error,     setError]       = useState("");
+  const [imgOk,     setImgOk]       = useState(!!value);
+  const [showUrl,   setShowUrl]     = useState(false);
+  const [urlInput,  setUrlInput]    = useState(value || "");
+  const galleryRef  = useRef(null);
+  const cameraRef   = useRef(null);
+
+  // Sync when parent resets value (e.g. OFF auto-fill)
+  useEffect(() => { setUrlInput(value || ""); setImgOk(!!value); }, [value]);
+
+  const handleFile = async (file) => {
+    if (!file) return;
+    setUploading(true); setError("");
+    try {
+      const { blob, mime } = await compressImage(file);
+      const ext  = mime === "image/jpeg" ? "jpg" : (file.name.split(".").pop() || "bin");
+      const pid  = productId || `tmp_${Date.now().toString(36)}`;
+      const path = `locals/${localId}/products/${pid}/photo.${ext}`;
+      const sRef = ref(storage, path);
+      const task = uploadBytesResumable(sRef, blob, { contentType: mime });
+      const url  = await new Promise((resolve, reject) => {
+        task.on("state_changed",
+          snap => setProgress(Math.round(snap.bytesTransferred / snap.totalBytes * 100)),
+          reject,
+          async () => { try { resolve(await getDownloadURL(task.snapshot.ref)); } catch(e){ reject(e); } }
+        );
+      });
+      onChange(url); setImgOk(true);
+    } catch (err) {
+      setError(storageErrMsg(err));
+    } finally {
+      setUploading(false); setProgress(0);
+      if (galleryRef.current) galleryRef.current.value = "";
+      if (cameraRef.current)  cameraRef.current.value  = "";
+    }
+  };
+
+  const applyUrl = () => {
+    onChange(urlInput.trim());
+    setImgOk(!!urlInput.trim());
+    setShowUrl(false);
+  };
+
+  const clear = () => { onChange(""); setImgOk(false); setUrlInput(""); setShowUrl(false); };
+
+  return (
+    <div>
+      {/* Hidden file inputs */}
+      <input ref={galleryRef} type="file" accept="image/*"
+        style={{ display:"none" }} onChange={e => handleFile(e.target.files?.[0])} />
+      <input ref={cameraRef} type="file" accept="image/*" capture="environment"
+        style={{ display:"none" }} onChange={e => handleFile(e.target.files?.[0])} />
+
+      {/* Preview */}
+      {value && imgOk && !uploading && (
+        <div className="img-picker-preview" style={{ marginBottom: 8 }}>
+          <img src={value} alt="" onError={() => setImgOk(false)} />
+          <button className="img-picker-remove" onClick={clear} title="Quitar foto">✕</button>
+        </div>
+      )}
+
+      {/* Upload progress */}
+      {uploading && (
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 4 }}>Subiendo… {progress}%</div>
+          <div className="img-picker-progress">
+            <div className="img-picker-progress-bar" style={{ width: `${progress}%` }} />
+          </div>
+        </div>
+      )}
+
+      {/* Error */}
+      {error && <div style={{ fontSize: 11, color: "#fca5a5", marginBottom: 6 }}>⚠️ {error}</div>}
+
+      {/* Buttons — always shown when no image set, or as "Cambiar foto" row */}
+      {!uploading && (
+        <>
+          {(!value || !imgOk) && !showUrl && (
+            <div className="img-picker-btns">
+              <button className="img-picker-btn" onClick={() => cameraRef.current?.click()}>
+                <span>📷</span><span>Cámara</span>
+              </button>
+              <button className="img-picker-btn" onClick={() => galleryRef.current?.click()}>
+                <span>🖼️</span><span>Galería</span>
+              </button>
+              <button className="img-picker-btn" onClick={() => setShowUrl(true)}>
+                <span>🔗</span><span>URL</span>
+              </button>
+            </div>
+          )}
+          {value && imgOk && !showUrl && (
+            <div className="img-picker-btns" style={{ marginTop: 6 }}>
+              <button className="img-picker-btn" onClick={() => cameraRef.current?.click()}>
+                <span>📷</span><span>Cámara</span>
+              </button>
+              <button className="img-picker-btn" onClick={() => galleryRef.current?.click()}>
+                <span>🖼️</span><span>Galería</span>
+              </button>
+              <button className="img-picker-btn" onClick={() => setShowUrl(true)}>
+                <span>🔗</span><span>URL</span>
+              </button>
+            </div>
+          )}
+          {showUrl && (
+            <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+              <input className="modal-input" value={urlInput}
+                placeholder="https://... (pegá URL de imagen)"
+                onChange={e => setUrlInput(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && applyUrl()}
+                style={{ flex:1, fontSize:11 }} autoFocus />
+              <button className="btn-primary" style={{ flex:"0 0 auto", padding:"9px 12px" }}
+                onClick={applyUrl}>✓</button>
+              <button className="btn-secondary" style={{ padding:"9px 10px" }}
+                onClick={() => setShowUrl(false)}>✕</button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─── ProductModal ─────────────────────────────────────────────────────────────
 function ProductModal({ product, onSave, onClose, categories, prefillBarcode = "" }) {
   const [form, setForm] = useState(
@@ -1012,7 +1145,6 @@ function ProductModal({ product, onSave, onClose, categories, prefillBarcode = "
       ? { ...product, minStock: product.minStock ?? 6 }
       : { name: "", category: "Básicos", type: "unit", price: "", stock: "", unit: "pza", barcode: prefillBarcode, img: "", minStock: 6 }
   );
-  const [imgOk, setImgOk]         = useState(!!product?.img); // true once preview <img> loads OK
   const [showScanner, setShowScanner] = useState(false);
   const [barcodeFlash, setBarcodeFlash] = useState(false);
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
@@ -1062,21 +1194,12 @@ function ProductModal({ product, onSave, onClose, categories, prefillBarcode = "
               color: "#9ca3af", fontSize: 15, padding: "4px 8px", cursor: "pointer", lineHeight: 1 }}>⌨️</button>
         </div>
         <div className="modal-section">
-          <div className="modal-label">Foto (URL)</div>
-          {/* Preview — shown when form.img is set and loaded without error */}
-          {form.img && imgOk && (
-            <img src={form.img} alt="" onError={() => setImgOk(false)}
-              style={{ width: "100%", maxHeight: 160, objectFit: "contain",
-                borderRadius: 8, background: "#fff", marginBottom: 6 }} />
-          )}
-          <input className="modal-input" value={form.img || ""} placeholder="https://... (pegá URL de imagen)"
-            onChange={e => { set("img", e.target.value); setImgOk(true); }}
-            style={{ fontSize: 11, color: form.img ? "#e8eaf0" : "#6b7280" }} />
-          {form.img && !imgOk && (
-            <div style={{ marginTop: 4, fontSize: 11, color: "#fca5a5" }}>
-              ⚠️ No se pudo cargar la imagen — verificá que la URL sea pública y termine en .jpg/.png/etc.
-            </div>
-          )}
+          <div className="modal-label">Foto</div>
+          <ProductImagePicker
+            productId={product?.id}
+            value={form.img || ""}
+            onChange={url => set("img", url)}
+          />
         </div>
         <div className="modal-section">
           <div className="modal-label">Nombre</div>
