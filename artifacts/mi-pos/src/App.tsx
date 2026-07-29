@@ -7,7 +7,7 @@ import {
 import { db, auth, storage } from "./firebase";
 import {
   collection, doc, onSnapshot, setDoc, deleteDoc, addDoc,
-  serverTimestamp, query, orderBy, updateDoc, getDocs, getDoc, writeBatch
+  serverTimestamp, query, orderBy, updateDoc, getDocs, getDoc, writeBatch, where, limit
 } from "firebase/firestore";
 import {
   createUserWithEmailAndPassword, signInWithEmailAndPassword,
@@ -152,6 +152,34 @@ const css = `
   .print-section-sub { font-size: 11px; color: #6b7280; }
   .print-ok { color: #00c896; font-size: 12px; margin-top: 6px; }
   .print-err { color: #f87171; font-size: 11px; margin-top: 6px; line-height: 1.5; }
+  /* ─── Arqueo de Caja ─── */
+  .arqueo-wrap { flex: 1; overflow-y: auto; padding: 14px; }
+  .arqueo-card { background: #252b3b; border: 1px solid #3a4158; border-radius: 12px; padding: 16px; margin-bottom: 12px; }
+  .arqueo-stat { display: flex; justify-content: space-between; align-items: center; padding: 7px 0; border-bottom: 1px solid #2a3045; font-size: 13px; }
+  .arqueo-stat:last-child { border-bottom: none; padding-bottom: 0; }
+  .arqueo-stat-label { color: #9ca3af; }
+  .arqueo-stat-value { font-weight: 700; font-family: monospace; }
+  .arqueo-section-title { font-size: 11px; font-weight: 700; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
+  .arqueo-entry { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px solid #1e2438; font-size: 12px; }
+  .arqueo-entry:last-child { border-bottom: none; }
+  .arqueo-entry-desc { flex: 1; color: #c9cdd6; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .arqueo-entry-amount { font-weight: 700; font-family: monospace; white-space: nowrap; }
+  .arqueo-entry-time { font-size: 10px; color: #6b7280; white-space: nowrap; }
+  .arqueo-close-btn { width: 100%; padding: 13px; background: #2d1010; border: 1px solid #f87171; border-radius: 10px; color: #f87171; font-size: 15px; font-weight: 700; cursor: pointer; font-family: 'Inter', sans-serif; margin-top: 4px; }
+  .arqueo-close-btn:disabled { opacity: 0.5; cursor: default; }
+  /* ─── Activity log ─── */
+  .activity-entry { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; border-bottom: 1px solid #2a3045; }
+  .activity-entry:last-child { border-bottom: none; }
+  .activity-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; margin-top: 5px; }
+  .activity-dot.inv { background: #60a5fa; }
+  .activity-dot.arq { background: #00c896; }
+  .activity-body { flex: 1; min-width: 0; }
+  .activity-action { font-size: 13px; color: #e8eaf0; }
+  .activity-meta { font-size: 11px; color: #6b7280; margin-top: 2px; }
+  /* ─── Perm tabs ─── */
+  .perm-tabs { display: flex; border-bottom: 1px solid #2a3045; margin-bottom: 14px; flex-shrink: 0; }
+  .perm-tab { flex: 1; padding: 10px; text-align: center; font-size: 13px; color: #6b7280; cursor: pointer; border-bottom: 2px solid transparent; background: none; border-top: none; border-left: none; border-right: none; font-family: 'Inter', sans-serif; transition: color .15s; }
+  .perm-tab.active { color: #00c896; border-bottom-color: #00c896; font-weight: 600; }
   /* ─── Settings ─── */
   .settings-area { padding: 16px; overflow-y: auto; flex: 1; }
   .settings-section { background: #1e2438; border: 1px solid #2a3045; border-radius: 12px; padding: 16px; margin-bottom: 14px; }
@@ -2134,13 +2162,22 @@ function InventoryView({ products, userProfile, categories }) {
 
   const handleSave = async (p) => {
     const { id, ...data } = p;
-    if (id) await setDoc(doc(db, "locals", localId, "products", id), data);
-    else await addDoc(collection(db, "locals", localId, "products"), data);
+    if (id) {
+      await setDoc(doc(db, "locals", localId, "products", id), data);
+      await logActivity(localId, userProfile, "inventory", "edit_product", `Editó producto: ${data.name}`);
+    } else {
+      await addDoc(collection(db, "locals", localId, "products"), data);
+      await logActivity(localId, userProfile, "inventory", "create_product", `Creó producto: ${data.name}`);
+    }
     setModal(null);
   };
 
   const handleDelete = async (id) => {
-    if (confirm("¿Eliminar este producto?")) await deleteDoc(doc(db, "locals", localId, "products", id));
+    const prod = products.find(p => p.id === id);
+    if (confirm("¿Eliminar este producto?")) {
+      await deleteDoc(doc(db, "locals", localId, "products", id));
+      await logActivity(localId, userProfile, "inventory", "delete_product", `Eliminó producto: ${prod?.name || id}`);
+    }
   };
 
   const handleExport = () => {
@@ -3200,8 +3237,243 @@ function MigrationSection() {
   );
 }
 
+// ─── Activity logger ─────────────────────────────────────────────────────────
+async function logActivity(localId, userProfile, type, action, details) {
+  try {
+    await addDoc(collection(db, "locals", localId, "activity_log"), {
+      type,    // "inventory" | "arqueo"
+      action,
+      userId:   userProfile?.id   || "",
+      userName: userProfile?.name || userProfile?.email || "Colaborador",
+      details,
+      timestamp: serverTimestamp(),
+    });
+  } catch (_) { /* silencioso — no bloquea la acción principal */ }
+}
+
+// ─── ArqueoView ───────────────────────────────────────────────────────────────
+function ArqueoView({ userProfile }) {
+  const localId = useContext(LocalCtx);
+  const [session, setSession]         = useState(null);
+  const [loading, setLoading]         = useState(true);
+  const [initialAmount, setInitialAmount] = useState("");
+  const [showGastoForm,  setShowGastoForm]  = useState(false);
+  const [showCompraForm, setShowCompraForm] = useState(false);
+  const [entryDesc,   setEntryDesc]   = useState("");
+  const [entryAmount, setEntryAmount] = useState("");
+  const [saving, setSaving]           = useState(false);
+
+  // Escuchar el arqueo abierto del local actual
+  useEffect(() => {
+    if (!localId) return;
+    const q = query(
+      collection(db, "locals", localId, "arqueos"),
+      where("status", "==", "open"),
+      orderBy("openedAt", "desc"),
+      limit(1)
+    );
+    const unsub = onSnapshot(q, snap => {
+      setSession(snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() });
+      setLoading(false);
+    });
+    return unsub;
+  }, [localId]);
+
+  const openCaja = async () => {
+    const amount = parseFloat(initialAmount);
+    if (isNaN(amount) || amount < 0) return;
+    setSaving(true);
+    try {
+      await addDoc(collection(db, "locals", localId, "arqueos"), {
+        status: "open",
+        openedAt: serverTimestamp(),
+        initialAmount: amount,
+        gastos:   [],
+        compras:  [],
+        userId:   userProfile?.id   || "",
+        userName: userProfile?.name || userProfile?.email || "",
+      });
+      await logActivity(localId, userProfile, "arqueo", "open_caja", `Abrió caja con monto inicial ${fmt(amount)}`);
+      setInitialAmount("");
+    } finally { setSaving(false); }
+  };
+
+  const addEntry = async (type) => {
+    const amount = parseFloat(entryAmount);
+    const desc   = entryDesc.trim();
+    if (!desc || isNaN(amount) || amount <= 0) return;
+    setSaving(true);
+    try {
+      const entry = {
+        id: Date.now().toString(36),
+        description: desc,
+        amount,
+        createdAt: new Date().toISOString(),
+        userId:   userProfile?.id   || "",
+        userName: userProfile?.name || userProfile?.email || "",
+      };
+      const field = type === "gasto" ? "gastos" : "compras";
+      await updateDoc(doc(db, "locals", localId, "arqueos", session.id), {
+        [field]: [...(session[field] || []), entry],
+      });
+      await logActivity(localId, userProfile, "arqueo", `add_${type}`,
+        `${type === "gasto" ? "Gasto" : "Compra"}: ${desc} — ${fmt(amount)}`);
+      setEntryDesc(""); setEntryAmount("");
+      setShowGastoForm(false); setShowCompraForm(false);
+    } finally { setSaving(false); }
+  };
+
+  const closeCaja = async () => {
+    if (!confirm("¿Cerrar la caja? Se guardará el resumen de esta sesión.")) return;
+    setSaving(true);
+    try {
+      await updateDoc(doc(db, "locals", localId, "arqueos", session.id), {
+        status: "closed",
+        closedAt: serverTimestamp(),
+      });
+      await logActivity(localId, userProfile, "arqueo", "close_caja",
+        `Cerró caja. Inicial: ${fmt(session.initialAmount || 0)}, Gastos: ${fmt((session.gastos||[]).reduce((s,e)=>s+e.amount,0))}, Compras: ${fmt((session.compras||[]).reduce((s,e)=>s+e.amount,0))}`);
+    } finally { setSaving(false); }
+  };
+
+  const fmtTime = (iso) => {
+    if (!iso) return "";
+    return new Date(iso).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" });
+  };
+
+  if (loading) return (
+    <div className="content" style={{ display:"flex", alignItems:"center", justifyContent:"center", color:"#6b7280", fontSize:13 }}>
+      Cargando…
+    </div>
+  );
+
+  /* ── Sin sesión abierta ── */
+  if (!session) return (
+    <div className="content">
+      <div className="arqueo-wrap" style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:16, minHeight:300 }}>
+        <div style={{ fontSize:52 }}>🏦</div>
+        <div style={{ fontSize:16, fontWeight:700, color:"#e8eaf0" }}>Abrir Caja</div>
+        <div style={{ fontSize:13, color:"#6b7280", textAlign:"center", maxWidth:260 }}>Ingresá el monto inicial disponible para dar cambio</div>
+        <div style={{ width:"100%", maxWidth:300 }}>
+          <div className="modal-label">Monto inicial ($)</div>
+          <input className="modal-input" type="number" min="0" placeholder="0.00"
+            value={initialAmount} onChange={e => setInitialAmount(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && openCaja()}
+            style={{ marginBottom:12, fontSize:22, fontFamily:"monospace", textAlign:"center" }} />
+          <button className="btn-primary" onClick={openCaja} disabled={saving || !initialAmount.trim()}>
+            {saving ? "Abriendo…" : "🔓 Abrir Caja"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  /* ── Sesión abierta ── */
+  const totalGastos  = (session.gastos  || []).reduce((s, e) => s + e.amount, 0);
+  const totalCompras = (session.compras || []).reduce((s, e) => s + e.amount, 0);
+  const efectivo     = (session.initialAmount || 0) - totalGastos - totalCompras;
+
+  const EntryForm = ({ color, onAdd }) => (
+    <div style={{ background:"#1e2438", border:"1px solid #3a4158", borderRadius:8, padding:10, marginBottom:10 }}>
+      <input className="modal-input" placeholder="Descripción" value={entryDesc}
+        onChange={e => setEntryDesc(e.target.value)} style={{ marginBottom:6 }} />
+      <div style={{ display:"flex", gap:8 }}>
+        <input className="modal-input" type="number" min="0" placeholder="Monto"
+          value={entryAmount} onChange={e => setEntryAmount(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && onAdd()}
+          style={{ fontFamily:"monospace" }} />
+        <button className="btn-primary" style={{ flex:"0 0 auto", padding:"9px 16px" }}
+          disabled={saving} onClick={onAdd}>✓</button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="content">
+      <div className="arqueo-wrap">
+
+        {/* Resumen */}
+        <div className="arqueo-card">
+          <div className="arqueo-section-title">Resumen de caja</div>
+          <div className="arqueo-stat">
+            <span className="arqueo-stat-label">💵 Monto inicial</span>
+            <span className="arqueo-stat-value" style={{ color:"#00c896" }}>{fmt(session.initialAmount || 0)}</span>
+          </div>
+          <div className="arqueo-stat">
+            <span className="arqueo-stat-label">📤 Total gastos</span>
+            <span className="arqueo-stat-value" style={{ color:"#f87171" }}>−{fmt(totalGastos)}</span>
+          </div>
+          <div className="arqueo-stat">
+            <span className="arqueo-stat-label">🛒 Total compras</span>
+            <span className="arqueo-stat-value" style={{ color:"#fb923c" }}>−{fmt(totalCompras)}</span>
+          </div>
+          <div className="arqueo-stat" style={{ marginTop:4 }}>
+            <span style={{ fontWeight:700, fontSize:14, color:"#e8eaf0" }}>💰 Efectivo en caja</span>
+            <span className="arqueo-stat-value" style={{ fontSize:17, color: efectivo >= 0 ? "#00c896" : "#f87171" }}>{fmt(efectivo)}</span>
+          </div>
+        </div>
+
+        {/* Gastos */}
+        <div className="arqueo-card">
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
+            <div className="arqueo-section-title" style={{ margin:0 }}>📤 Gastos ({(session.gastos||[]).length})</div>
+            <button style={{ background:"#3b1818", border:"1px solid #f8717166", borderRadius:7, padding:"4px 11px", color:"#f87171", fontSize:12, cursor:"pointer", fontFamily:"'Inter',sans-serif" }}
+              onClick={() => { setShowGastoForm(f=>!f); setShowCompraForm(false); setEntryDesc(""); setEntryAmount(""); }}>
+              {showGastoForm ? "Cancelar" : "+ Agregar"}
+            </button>
+          </div>
+          {showGastoForm && <EntryForm color="#f87171" onAdd={() => addEntry("gasto")} />}
+          {(session.gastos||[]).length === 0 && !showGastoForm
+            ? <div style={{ color:"#6b7280", fontSize:12 }}>Sin gastos registrados</div>
+            : (session.gastos||[]).map(e => (
+                <div key={e.id} className="arqueo-entry">
+                  <span className="arqueo-entry-desc">{e.description}</span>
+                  <span className="arqueo-entry-amount" style={{ color:"#f87171" }}>−{fmt(e.amount)}</span>
+                  <span className="arqueo-entry-time">{fmtTime(e.createdAt)}</span>
+                </div>
+              ))
+          }
+        </div>
+
+        {/* Compras */}
+        <div className="arqueo-card">
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
+            <div className="arqueo-section-title" style={{ margin:0 }}>🛒 Compras ({(session.compras||[]).length})</div>
+            <button style={{ background:"#2a1e0f", border:"1px solid #fb923c66", borderRadius:7, padding:"4px 11px", color:"#fb923c", fontSize:12, cursor:"pointer", fontFamily:"'Inter',sans-serif" }}
+              onClick={() => { setShowCompraForm(f=>!f); setShowGastoForm(false); setEntryDesc(""); setEntryAmount(""); }}>
+              {showCompraForm ? "Cancelar" : "+ Agregar"}
+            </button>
+          </div>
+          {showCompraForm && <EntryForm color="#fb923c" onAdd={() => addEntry("compra")} />}
+          {(session.compras||[]).length === 0 && !showCompraForm
+            ? <div style={{ color:"#6b7280", fontSize:12 }}>Sin compras registradas</div>
+            : (session.compras||[]).map(e => (
+                <div key={e.id} className="arqueo-entry">
+                  <span className="arqueo-entry-desc">{e.description}</span>
+                  <span className="arqueo-entry-amount" style={{ color:"#fb923c" }}>−{fmt(e.amount)}</span>
+                  <span className="arqueo-entry-time">{fmtTime(e.createdAt)}</span>
+                </div>
+              ))
+          }
+        </div>
+
+        <button className="arqueo-close-btn" onClick={closeCaja} disabled={saving}>
+          🔒 Cerrar Caja
+        </button>
+        <div style={{ fontSize:11, color:"#6b7280", textAlign:"center", marginTop:8 }}>
+          Abierta por {session.userName || "Desconocido"}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PermissionsView({ locals }: { locals: { id: string; name: string }[] }) {
+  const localId = useContext(LocalCtx);
+  const [tab, setTab]     = useState<"perms"|"activity">("perms");
   const [users, setUsers] = useState([]);
+  const [actLog, setActLog] = useState([]);
+
   useEffect(() => {
     const unsub = onSnapshot(collection(db, "users"), snap => {
       setUsers(snap.docs.map(d => ({ id: d.id, ...d.data() })));
@@ -3209,52 +3481,105 @@ function PermissionsView({ locals }: { locals: { id: string; name: string }[] })
     return unsub;
   }, []);
 
+  // Actividad: solo para el tab de actividad, query en tiempo real
+  useEffect(() => {
+    if (tab !== "activity" || !localId) return;
+    const q = query(
+      collection(db, "locals", localId, "activity_log"),
+      orderBy("timestamp", "desc"),
+      limit(100)
+    );
+    const unsub = onSnapshot(q, snap => {
+      setActLog(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+    return unsub;
+  }, [tab, localId]);
+
   const togglePerm = async (userId, perm, current) => {
     await updateDoc(doc(db, "users", userId), { [`permissions.${perm}`]: !current });
   };
 
-  const assignLocal = async (userId, localId) => {
-    await updateDoc(doc(db, "users", userId), { localId });
+  const assignLocal = async (userId, lid) => {
+    await updateDoc(doc(db, "users", userId), { localId: lid });
   };
 
-  const perms = [
+  const permsList = [
     { key: "sell", label: "Registrar ventas" },
     { key: "viewInventory", label: "Ver inventario" },
     { key: "editInventory", label: "Editar inventario" },
     { key: "viewReports", label: "Ver reportes" },
   ];
 
+  const fmtTs = (ts) => {
+    if (!ts) return "";
+    const d = ts.toDate ? ts.toDate() : new Date(ts);
+    return d.toLocaleString("es-AR", { day:"2-digit", month:"2-digit", year:"2-digit", hour:"2-digit", minute:"2-digit" });
+  };
+
   return (
-    <div className="content">
-      <div className="perm-area">
-        <MigrationSection />
-        <div style={{ fontSize: 12, color: "#9ca3af", marginBottom: 12 }}>Controlá los permisos de cada colaborador</div>
-        {users.filter(u => u.role !== "owner").map(u => (
-          <div key={u.id} className="perm-card">
-            <div className="perm-email">👤 {u.name || u.email}</div>
-            <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 8 }}>{u.email}</div>
-            <div className="perm-toggle" style={{ marginBottom: 4 }}>
-              <span style={{ fontWeight: 600 }}>🏪 Local asignado</span>
-              <select
-                value={u.localId || "local1"}
-                onChange={e => assignLocal(u.id, e.target.value)}
-                style={{ background: "#252b3b", border: "1px solid #3a4158", borderRadius: 6, color: "#e8eaf0", padding: "4px 8px", fontSize: 12, cursor: "pointer" }}
-              >
-                {locals.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-              </select>
+    <div className="content" style={{ display:"flex", flexDirection:"column" }}>
+      <div className="perm-tabs">
+        <button className={`perm-tab${tab === "perms"    ? " active" : ""}`} onClick={() => setTab("perms")}>👥 Permisos</button>
+        <button className={`perm-tab${tab === "activity" ? " active" : ""}`} onClick={() => setTab("activity")}>📋 Actividad</button>
+      </div>
+
+      {tab === "perms" && (
+        <div className="perm-area">
+          <MigrationSection />
+          <div style={{ fontSize: 12, color: "#9ca3af", marginBottom: 12 }}>Controlá los permisos de cada colaborador</div>
+          {users.filter(u => u.role !== "owner").map(u => (
+            <div key={u.id} className="perm-card">
+              <div className="perm-email">👤 {u.name || u.email}</div>
+              <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 8 }}>{u.email}</div>
+              <div className="perm-toggle" style={{ marginBottom: 4 }}>
+                <span style={{ fontWeight: 600 }}>🏪 Local asignado</span>
+                <select
+                  value={u.localId || "local1"}
+                  onChange={e => assignLocal(u.id, e.target.value)}
+                  style={{ background: "#252b3b", border: "1px solid #3a4158", borderRadius: 6, color: "#e8eaf0", padding: "4px 8px", fontSize: 12, cursor: "pointer" }}
+                >
+                  {locals.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                </select>
+              </div>
+              {permsList.map(p => (
+                <div key={p.key} className="perm-toggle">
+                  <span>{p.label}</span>
+                  <div className={`toggle-switch${u.permissions?.[p.key] ? " on" : ""}`} onClick={() => togglePerm(u.id, p.key, u.permissions?.[p.key])}>
+                    <div className="toggle-knob" />
+                  </div>
+                </div>
+              ))}
             </div>
-            {perms.map(p => (
-              <div key={p.key} className="perm-toggle">
-                <span>{p.label}</span>
-                <div className={`toggle-switch${u.permissions?.[p.key] ? " on" : ""}`} onClick={() => togglePerm(u.id, p.key, u.permissions?.[p.key])}>
-                  <div className="toggle-knob" />
+          ))}
+          {users.filter(u => u.role !== "owner").length === 0 && (
+            <div style={{ color: "#6b7280", textAlign: "center", padding: 40, fontSize: 13 }}>Aún no hay colaboradores registrados</div>
+          )}
+        </div>
+      )}
+
+      {tab === "activity" && (
+        <div className="perm-area">
+          <div style={{ fontSize: 12, color: "#9ca3af", marginBottom: 12 }}>
+            Cambios realizados por colaboradores en este local
+          </div>
+          {actLog.length === 0 && (
+            <div style={{ color: "#6b7280", textAlign: "center", padding: 40, fontSize: 13 }}>Sin actividad registrada aún</div>
+          )}
+          {actLog.map(entry => (
+            <div key={entry.id} className="activity-entry">
+              <div className={`activity-dot ${entry.type === "inventory" ? "inv" : "arq"}`} />
+              <div className="activity-body">
+                <div className="activity-action">{entry.details}</div>
+                <div className="activity-meta">
+                  {entry.userName} · {fmtTs(entry.timestamp)}
+                  {entry.type === "arqueo" && <span style={{ marginLeft:6, color:"#00c89688", fontSize:10 }}>CAJA</span>}
+                  {entry.type === "inventory" && <span style={{ marginLeft:6, color:"#60a5fa88", fontSize:10 }}>INVENTARIO</span>}
                 </div>
               </div>
-            ))}
-          </div>
-        ))}
-        {users.filter(u => u.role !== "owner").length === 0 && <div style={{ color: "#6b7280", textAlign: "center", padding: 40, fontSize: 13 }}>Aún no hay colaboradores registrados</div>}
-      </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -4073,13 +4398,14 @@ export default function App() {
   ].filter(n => n.show);
 
   const moreItems = [
-    { id: "reports",  icon: "📊", label: "Reportes",     show: perms.viewReports || isOwner },
-    { id: "ai",       icon: "🤖", label: "Asistente IA", show: canUseAI },
-    { id: "docs",     icon: "📄", label: "Documentos",   show: true },
-    { id: "settings", icon: "⚙️", label: "Ajustes",      show: isOwner },
+    { id: "arqueo",   icon: "🏦", label: "Arqueo de Caja", show: perms.sell || isOwner },
+    { id: "reports",  icon: "📊", label: "Reportes",       show: perms.viewReports || isOwner },
+    { id: "ai",       icon: "🤖", label: "Asistente IA",   show: canUseAI },
+    { id: "docs",     icon: "📄", label: "Documentos",     show: true },
+    { id: "settings", icon: "⚙️", label: "Ajustes",        show: isOwner },
   ].filter(n => n.show);
 
-  const titles = { sale: "Mi POS 2", inventory: "Inventario", history: "Historial", reports: "Reportes", perms: "Mi Equipo", ai: "Asistente IA", docs: "Documentos", settings: "Ajustes" };
+  const titles = { sale: "Mi POS 2", inventory: "Inventario", history: "Historial", reports: "Reportes", perms: "Mi Equipo", ai: "Asistente IA", docs: "Documentos", settings: "Ajustes", arqueo: "Arqueo de Caja" };
 
   const goTo = (id) => { setView(id); setMoreOpen(false); };
 
@@ -4130,6 +4456,7 @@ export default function App() {
           {view === "ai" && canUseAI && <AIChat products={products} sales={sales} userProfile={userProfile} />}
           {view === "docs"      && <DocsView userProfile={userProfile} />}
           {view === "settings"  && <SettingsView userProfile={userProfile} />}
+          {view === "arqueo"    && <ArqueoView userProfile={userProfile} />}
         </div>
 
         {/* ── Modal "Más" ────────────────────────────────────────────── */}
