@@ -30,15 +30,15 @@ jobs:
       - name: Cache node_modules
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.pnpm-store
-            node_modules
-            artifacts/mi-pos/node_modules
+          path: ~/.pnpm-store
           key: pnpm-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: pnpm-
 
-      - name: Instalar dependencias
-        run: pnpm install --no-frozen-lockfile
+      - name: Instalar dependencias (sin build scripts bloqueados)
+        run: pnpm install --ignore-scripts --no-frozen-lockfile
+
+      - name: Rebuild esbuild (binario necesario para Vite)
+        run: pnpm rebuild esbuild
 
       - name: Build web + sync Capacitor
         run: pnpm --filter @workspace/mi-pos run build:cap
