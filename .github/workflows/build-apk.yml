@@ -38,7 +38,7 @@ jobs:
           restore-keys: pnpm-
 
       - name: Instalar dependencias
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
 
       - name: Build web + sync Capacitor
         run: pnpm --filter @workspace/mi-pos run build:cap
