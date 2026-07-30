@@ -3993,6 +3993,9 @@ function LocationCard({ loc, onChange, onDelete }) {
   const [testSt, setTestSt]   = useState("idle");
   const [testMsg, setTestMsg] = useState("");
   const [saved,   setSaved]   = useState(false);
+  const [scanning,  setScanning]  = useState(false);
+  const [scanPct,   setScanPct]   = useState(0);
+  const [scanFound, setScanFound] = useState<string[]>([]);
 
   useEffect(() => { setName(loc.name); },          [loc.name]);
   useEffect(() => { setIp(loc.ip || ""); },        [loc.ip]);
@@ -4007,6 +4010,32 @@ function LocationCard({ loc, onChange, onDelete }) {
     onChange("tcpPort", parseInt(tcpPort) || 9100);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
+  };
+
+  // Escanea la subred buscando puerto 9100 abierto
+  const scanNetwork = async () => {
+    if (!IS_NATIVE) return;
+    setScanning(true); setScanFound([]); setScanPct(0);
+    const port = parseInt(tcpPort) || 9100;
+    // Detectar subred desde rawIp o usar 10.0.0 por defecto
+    const base = rawIp.trim()
+      ? rawIp.trim().split(".").slice(0, 3).join(".")
+      : "10.0.0";
+    const found: string[] = [];
+    const BATCH = 20;
+    for (let start = 1; start <= 254; start += BATCH) {
+      const batch: string[] = [];
+      for (let i = start; i < start + BATCH && i <= 254; i++) batch.push(`${base}.${i}`);
+      await Promise.all(batch.map(async (candidate) => {
+        try {
+          await (TcpPrint as any).ping({ ip: candidate, port, timeout: 1200 });
+          found.push(candidate);
+        } catch {}
+      }));
+      setScanPct(Math.round(Math.min(start + BATCH - 1, 254) / 254 * 100));
+    }
+    setScanFound([...found]);
+    setScanning(false);
   };
 
   const runTest = async (fn) => {
@@ -4094,6 +4123,38 @@ function LocationCard({ loc, onChange, onDelete }) {
         onClick={handleSave} disabled={!name.trim()}>
         {saved ? "✅ Guardado" : "💾 Guardar cambios"}
       </button>
+
+      {/* Escáner de red — solo en APK */}
+      {IS_NATIVE && (
+        <div style={{ marginTop:8 }}>
+          <button className="btn-secondary" style={{ width:"100%", fontSize:12, padding:"7px" }}
+            onClick={scanNetwork} disabled={scanning}>
+            {scanning ? `🔍 Escaneando… ${scanPct}%` : "🔍 Buscar impresora en la red"}
+          </button>
+          {scanning && (
+            <div style={{ background:"#252b3b", borderRadius:6, height:4, marginTop:6, overflow:"hidden" }}>
+              <div style={{ background:"#00c896", height:"100%", width:`${scanPct}%`, transition:"width 0.3s" }} />
+            </div>
+          )}
+          {!scanning && scanFound.length > 0 && (
+            <div style={{ marginTop:6, fontSize:12, color:"#9ca3af" }}>
+              Encontradas con puerto 9100 abierto:
+              {scanFound.map(foundIp => (
+                <button key={foundIp} className="btn-secondary"
+                  style={{ display:"block", width:"100%", marginTop:4, fontSize:13, padding:"7px", color:"#00c896", borderColor:"#00c896" }}
+                  onClick={() => { setRawIp(foundIp); setSaved(false); }}>
+                  📡 {foundIp} — Usar esta IP
+                </button>
+              ))}
+            </div>
+          )}
+          {!scanning && scanFound.length === 0 && scanPct === 100 && (
+            <div className="print-err" style={{ marginTop:6 }}>
+              ❌ No se encontró ninguna impresora en la red. Verificá que esté encendida y conectada al mismo WiFi.
+            </div>
+          )}
+        </div>
+      )}
 
       <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
         <button className="btn-secondary"

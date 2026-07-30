@@ -24,6 +24,33 @@ public class TcpPrintPlugin extends Plugin {
     private static final int CONNECT_TIMEOUT_MS = 5000;
     private static final int SO_TIMEOUT_MS = 8000;
 
+    /** Comprueba si el puerto TCP está abierto (sin enviar datos). Útil para escanear la red. */
+    @PluginMethod
+    public void ping(PluginCall call) {
+        String ip  = call.getString("ip", "");
+        int port    = call.getInt("port", 9100);
+        int timeout = call.getInt("timeout", 1500);
+
+        if (ip.isEmpty()) { call.reject("ip requerido"); return; }
+
+        final String fIp = ip;
+        final int fPort = port, fTimeout = timeout;
+        new Thread(() -> {
+            java.net.Socket s = null;
+            try {
+                s = new java.net.Socket();
+                s.connect(new InetSocketAddress(fIp, fPort), fTimeout);
+                JSObject ok = new JSObject();
+                ok.put("ip", fIp);
+                call.resolve(ok);
+            } catch (Exception e) {
+                call.reject("unreachable");
+            } finally {
+                if (s != null) try { s.close(); } catch (Exception ignored) {}
+            }
+        }).start();
+    }
+
     @PluginMethod
     public void print(PluginCall call) {
         String ip = call.getString("ip", "");
