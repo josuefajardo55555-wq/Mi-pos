@@ -5,7 +5,7 @@ import type { CapacitorConfig } from "@capacitor/cli";
 // La APK va a cargar siempre la versión más reciente cuando tenga wifi,
 // y usar la versión instalada cuando esté offline.
 // Dejalo en null para usar solo el bundle local (sin actualizaciones automáticas).
-const PRODUCTION_URL: string | null = null;
+const PRODUCTION_URL: string | null = "https://pos-update--josuequispe98.replit.app";
 // Ejemplo: const PRODUCTION_URL = "https://mi-pos.tuusuario.replit.app";
 
 const config: CapacitorConfig = {
