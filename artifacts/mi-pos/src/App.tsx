@@ -293,6 +293,14 @@ const css = `
   .img-picker-remove { position: absolute; top: 4px; right: 4px; background: rgba(0,0,0,.6); border: none; border-radius: 50%; width: 26px; height: 26px; color: #fff; font-size: 14px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
   .img-picker-progress { height: 4px; border-radius: 2px; background: #2a3045; margin: 6px 0; overflow: hidden; }
   .img-picker-progress-bar { height: 100%; background: linear-gradient(90deg,#00c896,#00a87a); transition: width .2s; }
+  /* ─── Scale barcode modal ─── */
+  .scale-row { display:flex; justify-content:space-between; align-items:center; padding: 6px 0; border-bottom: 1px solid #2a3045; }
+  .scale-row:last-child { border-bottom: none; }
+  .scale-label { font-size:13px; color:#9ca3af; }
+  .scale-value { font-family:monospace; font-size:13px; color:#e8eaf0; }
+  .scale-total-row { display:flex; justify-content:space-between; align-items:center; padding-top:10px; margin-top:4px; }
+  .scale-total-label { font-size:15px; font-weight:600; color:#9ca3af; }
+  .scale-total-value { font-size:20px; font-weight:700; color:#00c896; font-family:monospace; }
   .scanner-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.85); display: flex; align-items: flex-end; justify-content: center; z-index: 300; }
   .scanner-box { background: #1e2438; border-radius: 20px 20px 0 0; padding: 18px; width: 100%; max-width: 420px; }
   .scanner-box h2 { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
@@ -1891,6 +1899,117 @@ function SuccessModal({ sale, bizName, userProfile, onClose }) {
   );
 }
 
+// ─── Decodificador de códigos de balanza (EAN-13 / UPC-A peso variable) ───────
+// Formato: 2 PPPPP WWWWW C  (12-13 dígitos que empiezan con "2")
+//   P = PLU del producto (5 dígitos, con ceros adelante)
+//   W = peso en gramos   (5 dígitos)  |  o precio para el código de total
+//   C = dígito de control
+// PLU >= 20000 indica "total del ticket" (el valor W es el precio total).
+function parseScaleBarcode(raw) {
+  const code = String(raw).replace(/\D/g, "");
+  if (!code.startsWith("2") || code.length < 12 || code.length > 13) return null;
+  const plu5   = code.slice(1, 6);
+  const pluNum = parseInt(plu5, 10);
+  const pluKey = String(pluNum);                    // sin ceros adelante
+  const valNum = parseInt(code.slice(6, 11), 10);
+  if (isNaN(valNum)) return null;
+
+  if (pluNum >= 20000) return { type: "total", price: valNum };
+
+  const weightKg = valNum / 1000;
+  if (weightKg <= 0) return null;
+  return { type: "weight", plu5, pluKey, weightKg };
+}
+
+// Busca el producto por PLU, tolerando ceros adelante/atrás distintos
+function findProductByPlu(products, pluKey, plu5) {
+  return products.find(p => {
+    if (!p.barcode) return false;
+    const b = String(p.barcode).trim();
+    return b === pluKey || b === plu5 || String(parseInt(b, 10)) === pluKey;
+  });
+}
+
+// ─── ScaleWeightModal ─────────────────────────────────────────────────────────
+function ScaleWeightModal({ product, weightKg, onConfirm, onClose }) {
+  const linePrice = Math.round(product.price * weightKg);
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 320 }}>
+        <h2>⚖️ Producto de balanza</h2>
+        {product.img && (
+          <img src={product.img} alt="" style={{ width:"100%", maxHeight:90, objectFit:"contain",
+            borderRadius:8, background:"#fff", marginBottom:10 }} />
+        )}
+        <div style={{ background:"#1e2438", border:"1px solid #2a3045", borderRadius:8, padding:"12px 14px", marginBottom:14 }}>
+          <div style={{ fontWeight:700, fontSize:15, color:"#e8eaf0", marginBottom:10 }}>{product.name}</div>
+          <div className="scale-row">
+            <span className="scale-label">Peso escaneado</span>
+            <span className="scale-value">{weightKg.toFixed(3)} kg</span>
+          </div>
+          <div className="scale-row">
+            <span className="scale-label">Precio por kg</span>
+            <span className="scale-value">{fmt(product.price)}/kg</span>
+          </div>
+          <div className="scale-total-row">
+            <span className="scale-total-label">Total línea</span>
+            <span className="scale-total-value">{fmt(linePrice)}</span>
+          </div>
+        </div>
+        <div className="modal-actions">
+          <button className="btn-secondary" onClick={onClose}>Cancelar</button>
+          <button className="btn-primary" onClick={() => onConfirm(weightKg)}>✓ Agregar al carrito</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── ScaleTotalModal ──────────────────────────────────────────────────────────
+function ScaleTotalModal({ price, onConfirm, onClose }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 320 }}>
+        <h2>⚖️ Total de balanza</h2>
+        <div style={{ background:"#1e2438", border:"1px solid #2a3045", borderRadius:8, padding:"12px 14px", marginBottom:14 }}>
+          <div style={{ fontSize:12, color:"#9ca3af", marginBottom:10 }}>
+            Ticket completo de productos pesables — se agrega como una sola línea.
+          </div>
+          <div className="scale-total-row" style={{ paddingTop:0 }}>
+            <span className="scale-total-label">Total</span>
+            <span className="scale-total-value">{fmt(price)}</span>
+          </div>
+        </div>
+        <div className="modal-actions">
+          <button className="btn-secondary" onClick={onClose}>Cancelar</button>
+          <button className="btn-primary" onClick={onConfirm}>✓ Agregar al carrito</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── ScalePluNotFoundModal ────────────────────────────────────────────────────
+function ScalePluNotFoundModal({ pluKey, plu5, weightKg, onClose }) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 320 }}>
+        <h2>⚖️ Código de balanza</h2>
+        <div style={{ fontSize:13, color:"#9ca3af", lineHeight:1.7, marginBottom:16 }}>
+          Se detectó un código de balanza con:<br />
+          <strong style={{ color:"#e8eaf0" }}>PLU: </strong>
+          <code style={{ background:"#252b3b", padding:"1px 6px", borderRadius:4, color:"#00c896" }}>{pluKey}</code>
+          {plu5 !== pluKey && <> (ó <code style={{ background:"#252b3b", padding:"1px 6px", borderRadius:4 }}>{plu5}</code>)</>}
+          <br />
+          <strong style={{ color:"#e8eaf0" }}>Peso: </strong>{weightKg.toFixed(3)} kg<br /><br />
+          No encontré ningún producto con ese código. Registrá el producto en el inventario y poné <strong style={{ color:"#e8eaf0" }}>{pluKey}</strong> en el campo "Código de barras".
+        </div>
+        <button className="btn-primary" style={{ width:"100%" }} onClick={onClose}>Entendido</button>
+      </div>
+    </div>
+  );
+}
+
 // ─── SaleView ─────────────────────────────────────────────────────────────────
 function SaleView({ products, userProfile, categories, localName }) {
   const [search, setSearch] = useState("");
@@ -1911,6 +2030,7 @@ function SaleView({ products, userProfile, categories, localName }) {
   const [noStockId, setNoStockId]     = useState(null);   // product id flashing red
   const [stockToast, setStockToast]   = useState(null);   // red "sin stock" toast
   const [lowStockToast, setLowStockToast] = useState(null); // yellow "stock bajo" toast
+  const [scaleModal, setScaleModal]       = useState(null); // { type:'weight'|'total'|'plu_not_found', ... }
   const [blockNoStock, setBlockNoStock] = useState(() => {
     const v = localStorage.getItem("mi-pos-block-no-stock");
     return v === null ? true : v === "true"; // default: bloquear
@@ -2004,6 +2124,25 @@ function SaleView({ products, userProfile, categories, localName }) {
 
   // ── Open Food Facts lookup — called when barcode is not in local inventory ──
   const handleNotFound = async (barcode) => {
+    // Primero: verificar si es un código de balanza (empieza con 2, 12-13 dígitos)
+    const scale = parseScaleBarcode(barcode);
+    if (scale) {
+      setScannerOpen(false);
+      if (scale.type === "total") {
+        setScaleModal({ type: "total", price: scale.price });
+        return;
+      }
+      if (scale.type === "weight") {
+        const prod = findProductByPlu(barcodeProductsRef.current, scale.pluKey, scale.plu5);
+        if (prod) {
+          setScaleModal({ type: "weight", product: prod, weightKg: scale.weightKg });
+        } else {
+          setScaleModal({ type: "plu_not_found", pluKey: scale.pluKey, plu5: scale.plu5, weightKg: scale.weightKg });
+        }
+        return;
+      }
+    }
+    // Código regular: buscar en Open Food Facts
     setScannerOpen(false);
     setOffLoading(true);
     setOffModal(null);
@@ -2045,8 +2184,8 @@ function SaleView({ products, userProfile, categories, localName }) {
     // 3. Actualizar stock + arqueo abierto en paralelo en el fondo
     const stockSnapshot = cart;
     Promise.all([
-      // stock
-      ...stockSnapshot.map(item => {
+      // stock — excluir líneas de total de balanza (no tienen ID real en Firestore)
+      ...stockSnapshot.filter(item => !item.isScaleTotal).map(item => {
         const newStock = Math.max(0, (item.stock || 0) - item.qty);
         return updateDoc(doc(db, "locals", localId, "products", item.id), { stock: newStock });
       }),
@@ -2117,6 +2256,38 @@ function SaleView({ products, userProfile, categories, localName }) {
         </div>
       )}
       {kgModal && <KgModal product={kgModal} onConfirm={kg => { addToCart(kgModal, kg); setKgModal(null); }} onClose={() => setKgModal(null)} />}
+      {scaleModal?.type === "weight" && (
+        <ScaleWeightModal
+          product={scaleModal.product}
+          weightKg={scaleModal.weightKg}
+          onConfirm={kg => { addToCart(scaleModal.product, kg); setScaleModal(null); }}
+          onClose={() => setScaleModal(null)} />
+      )}
+      {scaleModal?.type === "total" && (
+        <ScaleTotalModal
+          price={scaleModal.price}
+          onConfirm={() => {
+            addToCart({
+              id: `scale_total_${Date.now()}`,
+              name: "Ticket de balanza",
+              price: scaleModal.price,
+              qty: 1,
+              type: "unit",
+              unit: "pza",
+              stock: 9999,
+              isScaleTotal: true,
+            }, 1);
+            setScaleModal(null);
+          }}
+          onClose={() => setScaleModal(null)} />
+      )}
+      {scaleModal?.type === "plu_not_found" && (
+        <ScalePluNotFoundModal
+          pluKey={scaleModal.pluKey}
+          plu5={scaleModal.plu5}
+          weightKg={scaleModal.weightKg}
+          onClose={() => setScaleModal(null)} />
+      )}
       {payModal && <PayModal total={total} onConfirm={handlePay} onClose={() => setPayModal(false)} />}
       {successModal && <SuccessModal sale={successModal} bizName={localName} userProfile={userProfile} onClose={() => setSuccessModal(null)} />}
       <div className="products-area">
