@@ -1471,7 +1471,7 @@ function AIChat({ products, sales, userProfile }) {
 const PAPER_WIDTH_CHARS: Record<number, number> = { 48: 24, 58: 32, 72: 48, 80: 56 };
 const PAPER_WIDTH_OPTIONS = [48, 58, 72, 80];
 
-function buildEscPos(sale, bizName = "MI POS", paperWidth = 72) {
+function buildEscPos(sale, bizName = "MI POS", paperWidth = 58) {
   const ESC = 0x1B;
   const GS  = 0x1D;
   const LF  = 0x0A;
@@ -1679,7 +1679,7 @@ function PrintOptionsModal({ sale, bizName, userProfile, onClose }) {
   // buildEscPos devuelve base64 directamente — usa el paperWidth de la ubicación seleccionada
   const ticketB64 = useMemo(() => {
     const selLoc_ = locations.find(l => l.id === selLocId);
-    return buildEscPos(sale, bizName, selLoc_?.paperWidth ?? 72);
+    return buildEscPos(sale, bizName, selLoc_?.paperWidth ?? 58);
   }, [sale, bizName, selLocId, locations]);
 
   // Diagnóstico: primeros 20 bytes en hex (deben empezar con 1B 40)
@@ -3999,7 +3999,7 @@ function LocationCard({ loc, onChange, onSaveAll, onDelete }) {
   const [ip,         setIp]         = useState(loc.ip || "");
   const [rawIp,      setRawIp]      = useState(loc.rawIp || "");
   const [tcpPort,    setTcpPort]    = useState(String(loc.tcpPort || "9100"));
-  const [paperWidth, setPaperWidth] = useState<number>(loc.paperWidth ?? 72);
+  const [paperWidth, setPaperWidth] = useState<number>(loc.paperWidth ?? 58);
   const [testSt, setTestSt]   = useState("idle");
   const [testMsg, setTestMsg] = useState("");
   const [saved,   setSaved]   = useState(false);
@@ -4011,7 +4011,7 @@ function LocationCard({ loc, onChange, onSaveAll, onDelete }) {
   useEffect(() => { setIp(loc.ip || ""); },                       [loc.ip]);
   useEffect(() => { setRawIp(loc.rawIp || ""); },                 [loc.rawIp]);
   useEffect(() => { setTcpPort(String(loc.tcpPort || "9100")); }, [loc.tcpPort]);
-  useEffect(() => { setPaperWidth(loc.paperWidth ?? 72); },       [loc.paperWidth]);
+  useEffect(() => { setPaperWidth(loc.paperWidth ?? 58); },       [loc.paperWidth]);
 
   const handleSave = () => {
     if (!name.trim()) return;
@@ -4212,9 +4212,9 @@ function LocationCard({ loc, onChange, onSaveAll, onDelete }) {
 
 // ─── SettingsView ─────────────────────────────────────────────────────────────
 const PRINTER_DEFAULT_LOCS = [
-  { id: "casa",   name: "Casa",       ip: "http://10.0.0.100:3000", rawIp: "", tcpPort: 9100, paperWidth: 72 },
-  { id: "local1", name: "Local 1",    ip: "http://10.0.0.101:3000", rawIp: "", tcpPort: 9100, paperWidth: 72 },
-  { id: "godoy",  name: "Godoy Cruz", ip: "http://10.0.0.102:3000", rawIp: "", tcpPort: 9100, paperWidth: 72 },
+  { id: "casa",   name: "Casa",       ip: "http://10.0.0.100:3000", rawIp: "", tcpPort: 9100, paperWidth: 58 },
+  { id: "local1", name: "Local 1",    ip: "http://10.0.0.101:3000", rawIp: "", tcpPort: 9100, paperWidth: 58 },
+  { id: "godoy",  name: "Godoy Cruz", ip: "http://10.0.0.102:3000", rawIp: "", tcpPort: 9100, paperWidth: 58 },
 ];
 
 function SettingsView({ userProfile }) {
