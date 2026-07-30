@@ -1676,9 +1676,11 @@ function PrintOptionsModal({ sale, bizName, userProfile, onClose }) {
   const wifiErr = IS_NATIVE ? nativeErr : wifiPrinter.errMsg;
   const [btSt, setBtSt]       = useState("idle");
   const [btErr, setBtErr]     = useState("");
-  const [paperWidth, setPaperWidth] = useState(72);
-  // buildEscPos devuelve base64 directamente
-  const ticketB64 = useMemo(() => buildEscPos(sale, bizName, paperWidth), [sale, bizName, paperWidth]);
+  // buildEscPos devuelve base64 directamente — usa el paperWidth de la ubicación seleccionada
+  const ticketB64 = useMemo(() => {
+    const selLoc_ = locations.find(l => l.id === selLocId);
+    return buildEscPos(sale, bizName, selLoc_?.paperWidth ?? 72);
+  }, [sale, bizName, selLocId, locations]);
 
   // Diagnóstico: primeros 20 bytes en hex (deben empezar con 1B 40)
   const hexDiag = useMemo(() => {
@@ -3992,11 +3994,12 @@ function PermissionsView({ locals }: { locals: { id: string; name: string }[] })
 }
 
 // ─── LocationCard ─────────────────────────────────────────────────────────────
-function LocationCard({ loc, onChange, onSaveAll, onDelete, paperWidth = 72 }) {
-  const [name,    setName]    = useState(loc.name);
-  const [ip,      setIp]      = useState(loc.ip || "");
-  const [rawIp,   setRawIp]   = useState(loc.rawIp || "");
-  const [tcpPort, setTcpPort] = useState(String(loc.tcpPort || "9100"));
+function LocationCard({ loc, onChange, onSaveAll, onDelete }) {
+  const [name,       setName]       = useState(loc.name);
+  const [ip,         setIp]         = useState(loc.ip || "");
+  const [rawIp,      setRawIp]      = useState(loc.rawIp || "");
+  const [tcpPort,    setTcpPort]    = useState(String(loc.tcpPort || "9100"));
+  const [paperWidth, setPaperWidth] = useState<number>(loc.paperWidth ?? 72);
   const [testSt, setTestSt]   = useState("idle");
   const [testMsg, setTestMsg] = useState("");
   const [saved,   setSaved]   = useState(false);
@@ -4004,19 +4007,21 @@ function LocationCard({ loc, onChange, onSaveAll, onDelete, paperWidth = 72 }) {
   const [scanPct,   setScanPct]   = useState(0);
   const [scanFound, setScanFound] = useState<string[]>([]);
 
-  useEffect(() => { setName(loc.name); },          [loc.name]);
-  useEffect(() => { setIp(loc.ip || ""); },        [loc.ip]);
-  useEffect(() => { setRawIp(loc.rawIp || ""); },  [loc.rawIp]);
+  useEffect(() => { setName(loc.name); },                         [loc.name]);
+  useEffect(() => { setIp(loc.ip || ""); },                       [loc.ip]);
+  useEffect(() => { setRawIp(loc.rawIp || ""); },                 [loc.rawIp]);
   useEffect(() => { setTcpPort(String(loc.tcpPort || "9100")); }, [loc.tcpPort]);
+  useEffect(() => { setPaperWidth(loc.paperWidth ?? 72); },       [loc.paperWidth]);
 
   const handleSave = () => {
     if (!name.trim()) return;
     // Llamar onSaveAll con todos los campos juntos para evitar stale-closure en onChange
     onSaveAll({
-      name:    name.trim(),
-      ip:      ip.trim(),
-      rawIp:   rawIp.trim(),
-      tcpPort: parseInt(tcpPort) || 9100,
+      name:       name.trim(),
+      ip:         ip.trim(),
+      rawIp:      rawIp.trim(),
+      tcpPort:    parseInt(tcpPort) || 9100,
+      paperWidth: paperWidth,
     });
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
@@ -4128,6 +4133,27 @@ function LocationCard({ loc, onChange, onSaveAll, onDelete, paperWidth = 72 }) {
         IP TCP y puerto se usan en la APK nativa (sin proxy)
       </div>
 
+      {/* Ancho de papel por ubicación */}
+      <div style={{ marginTop:10 }}>
+        <div style={{ fontSize:11, color:"#9ca3af", marginBottom:5 }}>📄 Ancho de papel</div>
+        <div style={{ display:"flex", gap:5 }}>
+          {PAPER_WIDTH_OPTIONS.map(w => (
+            <button key={w}
+              onClick={() => { setPaperWidth(w); setSaved(false); }}
+              style={{
+                flex:1, padding:"6px 2px", borderRadius:7, border:"1.5px solid",
+                borderColor: paperWidth === w ? "#00c896" : "#3a4158",
+                background: paperWidth === w ? "#0d2b1e" : "#252b3b",
+                color: paperWidth === w ? "#00c896" : "#6b7280",
+                fontSize:12, fontWeight: paperWidth === w ? 700 : 400,
+                cursor:"pointer",
+              }}>
+              {w}mm
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* Botón guardar */}
       <button className="btn-primary" style={{ width:"100%", marginTop:8, fontSize:13, padding:"8px" }}
         onClick={handleSave} disabled={!name.trim()}>
@@ -4186,16 +4212,15 @@ function LocationCard({ loc, onChange, onSaveAll, onDelete, paperWidth = 72 }) {
 
 // ─── SettingsView ─────────────────────────────────────────────────────────────
 const PRINTER_DEFAULT_LOCS = [
-  { id: "casa",   name: "Casa",       ip: "http://10.0.0.100:3000", rawIp: "", tcpPort: 9100 },
-  { id: "local1", name: "Local 1",    ip: "http://10.0.0.101:3000", rawIp: "", tcpPort: 9100 },
-  { id: "godoy",  name: "Godoy Cruz", ip: "http://10.0.0.102:3000", rawIp: "", tcpPort: 9100 },
+  { id: "casa",   name: "Casa",       ip: "http://10.0.0.100:3000", rawIp: "", tcpPort: 9100, paperWidth: 72 },
+  { id: "local1", name: "Local 1",    ip: "http://10.0.0.101:3000", rawIp: "", tcpPort: 9100, paperWidth: 72 },
+  { id: "godoy",  name: "Godoy Cruz", ip: "http://10.0.0.102:3000", rawIp: "", tcpPort: 9100, paperWidth: 72 },
 ];
 
 function SettingsView({ userProfile }) {
   const uid = userProfile?.id;
-  const [locations,   setLocations]   = useState([]);
-  const [paperWidth,  setPaperWidth]  = useState(72);
-  const [loading,     setLoading]     = useState(true);
+  const [locations, setLocations] = useState([]);
+  const [loading,   setLoading]   = useState(true);
   const [saving,      setSaving]      = useState(false);
   const [showAdd,    setShowAdd]    = useState(false);
   const [newName,    setNewName]    = useState("");
@@ -4208,11 +4233,9 @@ function SettingsView({ userProfile }) {
     if (!uid) return;
     const unsub = onSnapshot(doc(db, "users", uid, "settings", "printer"), (snap) => {
       if (snap.exists()) {
-        const d = snap.data();
-        setLocations(d.locations || []);
-        if (d.paperWidth) setPaperWidth(d.paperWidth);
+        setLocations(snap.data().locations || []);
       } else {
-        setDoc(doc(db, "users", uid, "settings", "printer"), { locations: PRINTER_DEFAULT_LOCS, paperWidth: 72 });
+        setDoc(doc(db, "users", uid, "settings", "printer"), { locations: PRINTER_DEFAULT_LOCS });
         setLocations(PRINTER_DEFAULT_LOCS);
       }
       setLoading(false);
@@ -4220,20 +4243,12 @@ function SettingsView({ userProfile }) {
     return unsub;
   }, [uid]);
 
-  const persist = async (locs, pw?: number) => {
+  const persist = async (locs) => {
     if (!uid) return;
     setSaving(true);
     try {
-      await setDoc(doc(db, "users", uid, "settings", "printer"), {
-        locations: locs,
-        paperWidth: pw ?? paperWidth,
-      });
+      await setDoc(doc(db, "users", uid, "settings", "printer"), { locations: locs });
     } finally { setSaving(false); }
-  };
-
-  const savePaperWidth = async (pw: number) => {
-    setPaperWidth(pw);
-    await persist(locations, pw);
   };
 
   const debouncedPersist = (locs) => {
@@ -4279,30 +4294,6 @@ function SettingsView({ userProfile }) {
     <div className="content" style={{ overflowY: "auto" }}>
       <div className="settings-area">
 
-        {/* ── Ancho de papel ── */}
-        <div className="settings-section">
-          <div className="settings-section-title">📄 Ancho de papel</div>
-          <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-            {PAPER_WIDTH_OPTIONS.map(w => (
-              <button key={w}
-                onClick={() => savePaperWidth(w)}
-                style={{
-                  flex:1, minWidth:60, padding:"8px 4px", borderRadius:8, border:"1.5px solid",
-                  borderColor: paperWidth === w ? "#00c896" : "#3a4158",
-                  background: paperWidth === w ? "#0d2b1e" : "#252b3b",
-                  color: paperWidth === w ? "#00c896" : "#9ca3af",
-                  fontSize:13, fontWeight: paperWidth === w ? 700 : 400,
-                  cursor:"pointer", fontFamily:"'Inter',sans-serif"
-                }}>
-                {w}mm
-              </button>
-            ))}
-          </div>
-          <div style={{ fontSize:11, color:"#6b7280", marginTop:6 }}>
-            Seleccioná el ancho del rollo de papel que tenés cargado. Afecta el formato de todos los tickets.
-          </div>
-        </div>
-
         <div className="settings-section">
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
             <div className="settings-section-title" style={{ marginBottom: 0 }}>🖨️ Ubicaciones de impresora</div>
@@ -4323,8 +4314,7 @@ function SettingsView({ userProfile }) {
                 <LocationCard key={loc.id} loc={loc}
                   onChange={(field, value) => updateLoc(loc.id, field, value)}
                   onSaveAll={(fields) => updateLocAll(loc.id, fields)}
-                  onDelete={() => deleteLoc(loc.id)}
-                  paperWidth={paperWidth} />
+                  onDelete={() => deleteLoc(loc.id)} />
               ))}
 
               {showAdd ? (
