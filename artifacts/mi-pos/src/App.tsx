@@ -3992,7 +3992,7 @@ function PermissionsView({ locals }: { locals: { id: string; name: string }[] })
 }
 
 // ─── LocationCard ─────────────────────────────────────────────────────────────
-function LocationCard({ loc, onChange, onDelete }) {
+function LocationCard({ loc, onChange, onSaveAll, onDelete }) {
   const [name,    setName]    = useState(loc.name);
   const [ip,      setIp]      = useState(loc.ip || "");
   const [rawIp,   setRawIp]   = useState(loc.rawIp || "");
@@ -4011,10 +4011,13 @@ function LocationCard({ loc, onChange, onDelete }) {
 
   const handleSave = () => {
     if (!name.trim()) return;
-    onChange("name",    name.trim());
-    onChange("ip",      ip.trim());
-    onChange("rawIp",   rawIp.trim());
-    onChange("tcpPort", parseInt(tcpPort) || 9100);
+    // Llamar onSaveAll con todos los campos juntos para evitar stale-closure en onChange
+    onSaveAll({
+      name:    name.trim(),
+      ip:      ip.trim(),
+      rawIp:   rawIp.trim(),
+      tcpPort: parseInt(tcpPort) || 9100,
+    });
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
@@ -4244,6 +4247,13 @@ function SettingsView({ userProfile }) {
     debouncedPersist(updated);
   };
 
+  // Guarda todos los campos a la vez para evitar stale-closure al llamar onChange múltiples veces
+  const updateLocAll = (id, fields: Record<string, any>) => {
+    const updated = locations.map(l => l.id === id ? { ...l, ...fields } : l);
+    setLocations(updated);
+    persist(updated);  // guardado inmediato (no debounce) porque el usuario presionó Guardar
+  };
+
   const deleteLoc = (id) => {
     const updated = locations.filter(l => l.id !== id);
     setLocations(updated);
@@ -4312,6 +4322,7 @@ function SettingsView({ userProfile }) {
               {locations.map(loc => (
                 <LocationCard key={loc.id} loc={loc}
                   onChange={(field, value) => updateLoc(loc.id, field, value)}
+                  onSaveAll={(fields) => updateLocAll(loc.id, fields)}
                   onDelete={() => deleteLoc(loc.id)} />
               ))}
 
