@@ -1467,7 +1467,11 @@ function AIChat({ products, sales, userProfile }) {
 }
 
 // ─── ESC/POS ticket builder ───────────────────────────────────────────────────
-function buildEscPos(sale, bizName = "MI POS") {
+// Chars por línea según ancho de papel (mm)
+const PAPER_WIDTH_CHARS: Record<number, number> = { 48: 24, 58: 32, 72: 48, 80: 56 };
+const PAPER_WIDTH_OPTIONS = [48, 58, 72, 80];
+
+function buildEscPos(sale, bizName = "MI POS", paperWidth = 72) {
   const ESC = 0x1B;
   const GS  = 0x1D;
   const LF  = 0x0A;
@@ -1494,8 +1498,8 @@ function buildEscPos(sale, bizName = "MI POS") {
   }
 
   const fmtP  = (n) => "$" + (n || 0).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const SEP   = "--------------------------------";
-  const W     = 32;
+  const W     = PAPER_WIDTH_CHARS[paperWidth] ?? 48;
+  const SEP   = "-".repeat(W);
   const padR  = (s, n) => String(s).substring(0, n).padEnd(n, " ");
   const now   = new Date();
 
@@ -1672,8 +1676,9 @@ function PrintOptionsModal({ sale, bizName, userProfile, onClose }) {
   const wifiErr = IS_NATIVE ? nativeErr : wifiPrinter.errMsg;
   const [btSt, setBtSt]       = useState("idle");
   const [btErr, setBtErr]     = useState("");
+  const [paperWidth, setPaperWidth] = useState(72);
   // buildEscPos devuelve base64 directamente
-  const ticketB64 = useMemo(() => buildEscPos(sale, bizName), [sale, bizName]);
+  const ticketB64 = useMemo(() => buildEscPos(sale, bizName, paperWidth), [sale, bizName, paperWidth]);
 
   // Diagnóstico: primeros 20 bytes en hex (deben empezar con 1B 40)
   const hexDiag = useMemo(() => {
@@ -1689,8 +1694,10 @@ function PrintOptionsModal({ sale, bizName, userProfile, onClose }) {
   useEffect(() => {
     if (!uid) return;
     const unsub = onSnapshot(doc(db, "users", uid, "settings", "printer"), snap => {
-      const locs = snap.exists() ? (snap.data().locations || []) : PRINTER_DEFAULT_LOCS;
+      const data = snap.exists() ? snap.data() : {};
+      const locs = data.locations || PRINTER_DEFAULT_LOCS;
       setLocations(locs);
+      if (data.paperWidth) setPaperWidth(data.paperWidth);
       if (!locs.find(l => l.id === selLocId) && locs.length > 0) {
         setSelLocId(locs[0].id);
       }
@@ -4183,9 +4190,10 @@ const PRINTER_DEFAULT_LOCS = [
 
 function SettingsView({ userProfile }) {
   const uid = userProfile?.id;
-  const [locations, setLocations] = useState([]);
-  const [loading, setLoading]     = useState(true);
-  const [saving,  setSaving]      = useState(false);
+  const [locations,   setLocations]   = useState([]);
+  const [paperWidth,  setPaperWidth]  = useState(72);
+  const [loading,     setLoading]     = useState(true);
+  const [saving,      setSaving]      = useState(false);
   const [showAdd,    setShowAdd]    = useState(false);
   const [newName,    setNewName]    = useState("");
   const [newIp,      setNewIp]      = useState("http://");
@@ -4197,9 +4205,11 @@ function SettingsView({ userProfile }) {
     if (!uid) return;
     const unsub = onSnapshot(doc(db, "users", uid, "settings", "printer"), (snap) => {
       if (snap.exists()) {
-        setLocations(snap.data().locations || []);
+        const d = snap.data();
+        setLocations(d.locations || []);
+        if (d.paperWidth) setPaperWidth(d.paperWidth);
       } else {
-        setDoc(doc(db, "users", uid, "settings", "printer"), { locations: PRINTER_DEFAULT_LOCS });
+        setDoc(doc(db, "users", uid, "settings", "printer"), { locations: PRINTER_DEFAULT_LOCS, paperWidth: 72 });
         setLocations(PRINTER_DEFAULT_LOCS);
       }
       setLoading(false);
@@ -4207,11 +4217,20 @@ function SettingsView({ userProfile }) {
     return unsub;
   }, [uid]);
 
-  const persist = async (locs) => {
+  const persist = async (locs, pw?: number) => {
     if (!uid) return;
     setSaving(true);
-    try { await setDoc(doc(db, "users", uid, "settings", "printer"), { locations: locs }); }
-    finally { setSaving(false); }
+    try {
+      await setDoc(doc(db, "users", uid, "settings", "printer"), {
+        locations: locs,
+        paperWidth: pw ?? paperWidth,
+      });
+    } finally { setSaving(false); }
+  };
+
+  const savePaperWidth = async (pw: number) => {
+    setPaperWidth(pw);
+    await persist(locations, pw);
   };
 
   const debouncedPersist = (locs) => {
@@ -4249,6 +4268,31 @@ function SettingsView({ userProfile }) {
   return (
     <div className="content" style={{ overflowY: "auto" }}>
       <div className="settings-area">
+
+        {/* ── Ancho de papel ── */}
+        <div className="settings-section">
+          <div className="settings-section-title">📄 Ancho de papel</div>
+          <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+            {PAPER_WIDTH_OPTIONS.map(w => (
+              <button key={w}
+                onClick={() => savePaperWidth(w)}
+                style={{
+                  flex:1, minWidth:60, padding:"8px 4px", borderRadius:8, border:"1.5px solid",
+                  borderColor: paperWidth === w ? "#00c896" : "#3a4158",
+                  background: paperWidth === w ? "#0d2b1e" : "#252b3b",
+                  color: paperWidth === w ? "#00c896" : "#9ca3af",
+                  fontSize:13, fontWeight: paperWidth === w ? 700 : 400,
+                  cursor:"pointer", fontFamily:"'Inter',sans-serif"
+                }}>
+                {w}mm
+              </button>
+            ))}
+          </div>
+          <div style={{ fontSize:11, color:"#6b7280", marginTop:6 }}>
+            Seleccioná el ancho del rollo de papel que tenés cargado. Afecta el formato de todos los tickets.
+          </div>
+        </div>
+
         <div className="settings-section">
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
             <div className="settings-section-title" style={{ marginBottom: 0 }}>🖨️ Ubicaciones de impresora</div>
