@@ -1,0 +1,8 @@
+{
+	"appId": "com.mipos.app",
+	"appName": "Mi POS",
+	"webDir": "dist/public",
+	"android": {
+		"allowMixedContent": false
+	}
+}
