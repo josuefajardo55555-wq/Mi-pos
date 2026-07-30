@@ -18,13 +18,20 @@ localPort = 23802
 run = "pnpm --filter @workspace/mi-pos run dev"
 
 [services.production]
-build = [ "pnpm", "--filter", "@workspace/mi-pos", "run", "build" ]
-publicDir = "artifacts/mi-pos/dist/public"
-serve = "static"
 
-[[services.production.rewrites]]
-from = "/*"
-to = "/index.html"
+[services.production.build]
+args = ["pnpm", "--filter", "@workspace/mi-pos", "run", "build"]
+
+[services.production.build.env]
+PORT = "23802"
+BASE_PATH = "/"
+
+[services.production.run]
+args = ["node", "artifacts/mi-pos/serve.mjs"]
+
+[services.production.run.env]
+PORT = "23802"
+NODE_ENV = "production"
 
 [services.env]
 PORT = "23802"
