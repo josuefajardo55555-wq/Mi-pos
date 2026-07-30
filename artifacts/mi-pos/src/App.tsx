@@ -1914,7 +1914,15 @@ function parseScaleBarcode(raw) {
   const valNum = parseInt(code.slice(6, 11), 10);
   if (isNaN(valNum)) return null;
 
-  if (pluNum >= 20000) return { type: "total", price: valNum };
+  // Código de total: en EAN-13 (13 dígitos) hay un dígito extra en posición 6
+  // que desplaza el precio → usar slice(7,12). En 12 dígitos el precio ya está en slice(6,11).
+  if (pluNum >= 20000) {
+    const priceNum = code.length === 13
+      ? parseInt(code.slice(7, 12), 10)
+      : valNum;
+    if (isNaN(priceNum) || priceNum <= 0) return null;
+    return { type: "total", price: priceNum };
+  }
 
   const weightKg = valNum / 100;   // la balanza codifica en decagramos (10 g = 1 dag)
   if (weightKg <= 0) return null;
