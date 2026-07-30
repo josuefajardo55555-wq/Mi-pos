@@ -3992,7 +3992,7 @@ function PermissionsView({ locals }: { locals: { id: string; name: string }[] })
 }
 
 // ─── LocationCard ─────────────────────────────────────────────────────────────
-function LocationCard({ loc, onChange, onSaveAll, onDelete }) {
+function LocationCard({ loc, onChange, onSaveAll, onDelete, paperWidth = 72 }) {
   const [name,    setName]    = useState(loc.name);
   const [ip,      setIp]      = useState(loc.ip || "");
   const [rawIp,   setRawIp]   = useState(loc.rawIp || "");
@@ -4072,7 +4072,7 @@ function LocationCard({ loc, onChange, onSaveAll, onDelete }) {
   const testPrint = () => runTest(async () => {
     const fake = { id: "TEST0001", total: 1000, method: "Efectivo", received: 1000, change: 0,
       items: [{ name: "Producto prueba", qty: 1, price: 1000 }] };
-    const b64 = buildEscPos(fake, name.toUpperCase() || "PRUEBA");
+    const b64 = buildEscPos(fake, name.toUpperCase() || "PRUEBA", paperWidth);
     const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
 
     if (IS_NATIVE) {
@@ -4323,7 +4323,8 @@ function SettingsView({ userProfile }) {
                 <LocationCard key={loc.id} loc={loc}
                   onChange={(field, value) => updateLoc(loc.id, field, value)}
                   onSaveAll={(fields) => updateLocAll(loc.id, fields)}
-                  onDelete={() => deleteLoc(loc.id)} />
+                  onDelete={() => deleteLoc(loc.id)}
+                  paperWidth={paperWidth} />
               ))}
 
               {showAdd ? (
