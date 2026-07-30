@@ -10,7 +10,7 @@ import {
   serverTimestamp, query, orderBy, updateDoc, getDocs, getDoc, writeBatch, where, limit
 } from "firebase/firestore";
 import {
-  createUserWithEmailAndPassword, signInWithEmailAndPassword,
+  createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail,
   onAuthStateChanged, signOut
 } from "firebase/auth";
 import { ref, uploadBytesResumable, getDownloadURL } from "firebase/storage";
@@ -473,6 +473,9 @@ const css = `
   .login-input:focus { border-color: #00c896; }
   .login-btn { width: 100%; padding: 12px; background: linear-gradient(135deg, #00c896, #00a87a); border: none; border-radius: 10px; color: #1a1f2e; font-size: 15px; font-weight: 700; cursor: pointer; margin-top: 8px; font-family: 'Inter', sans-serif; }
   .login-error { background: #ff6b6b22; border: 1px solid #ff6b6b44; border-radius: 8px; padding: 10px 12px; font-size: 12px; color: #ff6b6b; margin-top: 10px; }
+  .login-forgot { background: none; border: none; color: #00c896; font-size: 12px; cursor: pointer; padding: 0; font-family: 'Inter', sans-serif; text-decoration: underline; }
+  .login-forgot:disabled { opacity: 0.5; }
+  .login-success { background: #00c89622; border: 1px solid #00c89644; border-radius: 8px; padding: 10px 12px; font-size: 12px; color: #00c896; margin-top: 10px; }
   /* Permisos */
   .perm-area { flex: 1; overflow-y: auto; padding: 12px; }
   .perm-card { background: #252b3b; border: 1px solid #3a4158; border-radius: 10px; padding: 14px; margin-bottom: 10px; }
@@ -496,6 +499,22 @@ function LoginScreen({ firebaseError }) {
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [resetSent, setResetSent] = useState(false);
+
+  const handleForgotPassword = async () => {
+    if (!email) { setError("Ingresá tu email primero"); return; }
+    setError(""); setLoading(true);
+    try {
+      await sendPasswordResetEmail(auth, email);
+      setResetSent(true);
+    } catch (e) {
+      const msg = e.message || "";
+      if (msg.includes("user-not-found")) setError("No hay cuenta registrada con ese email");
+      else if (msg.includes("invalid-email")) setError("El email no es válido");
+      else setError("No se pudo enviar el email. Intentá de nuevo.");
+    }
+    setLoading(false);
+  };
 
   const friendlyError = (e) => {
     const msg = e.message || "";
@@ -557,9 +576,21 @@ function LoginScreen({ firebaseError }) {
           <label>Contraseña</label>
           <input className="login-input" type="password" value={pass} onChange={e => setPass(e.target.value)} placeholder="••••••" autoComplete="current-password" onKeyDown={e => e.key === "Enter" && handleSubmit()} />
         </div>
+        {tab === "login" && (
+          <div style={{ textAlign: "right", marginTop: -4, marginBottom: 8 }}>
+            <button className="login-forgot" onClick={handleForgotPassword} disabled={loading}>
+              ¿Olvidaste tu contraseña?
+            </button>
+          </div>
+        )}
         <button className="login-btn" onClick={handleSubmit} disabled={loading}>
           {loading ? "Cargando..." : tab === "login" ? "Entrar" : "Crear cuenta"}
         </button>
+        {resetSent && (
+          <div className="login-success">
+            ✅ Te enviamos un email para restablecer tu contraseña. Revisá tu bandeja de entrada.
+          </div>
+        )}
         {error && <div className="login-error">{error}</div>}
       </div>
     </div>
