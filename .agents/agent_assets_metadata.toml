@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "Pe7w6jARNKdpp-Yny_ZHJ"
+uri = "file://attached_assets/mi-pos-android.zip"
+type = "unspecified"
+title = "Mi POS — Proyecto Android (Android Studio)"
