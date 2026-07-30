@@ -1916,7 +1916,7 @@ function parseScaleBarcode(raw) {
 
   if (pluNum >= 20000) return { type: "total", price: valNum };
 
-  const weightKg = valNum / 1000;
+  const weightKg = valNum / 100;   // la balanza codifica en decagramos (10 g = 1 dag)
   if (weightKg <= 0) return null;
   return { type: "weight", plu5, pluKey, weightKg };
 }
