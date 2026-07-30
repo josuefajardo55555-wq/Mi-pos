@@ -3987,48 +3987,77 @@ function PermissionsView({ locals }: { locals: { id: string; name: string }[] })
 // ─── LocationCard ─────────────────────────────────────────────────────────────
 function LocationCard({ loc, onChange, onDelete }) {
   const [name,    setName]    = useState(loc.name);
-  const [ip,      setIp]      = useState(loc.ip);
+  const [ip,      setIp]      = useState(loc.ip || "");
   const [rawIp,   setRawIp]   = useState(loc.rawIp || "");
-  const [tcpPort, setTcpPort] = useState(loc.tcpPort || "9100");
+  const [tcpPort, setTcpPort] = useState(String(loc.tcpPort || "9100"));
   const [testSt, setTestSt]   = useState("idle");
   const [testMsg, setTestMsg] = useState("");
+  const [saved,   setSaved]   = useState(false);
 
   useEffect(() => { setName(loc.name); },          [loc.name]);
-  useEffect(() => { setIp(loc.ip); },              [loc.ip]);
+  useEffect(() => { setIp(loc.ip || ""); },        [loc.ip]);
   useEffect(() => { setRawIp(loc.rawIp || ""); },  [loc.rawIp]);
   useEffect(() => { setTcpPort(String(loc.tcpPort || "9100")); }, [loc.tcpPort]);
 
-  const runFetch = async (fn) => {
+  const handleSave = () => {
+    if (!name.trim()) return;
+    onChange("name",    name.trim());
+    onChange("ip",      ip.trim());
+    onChange("rawIp",   rawIp.trim());
+    onChange("tcpPort", parseInt(tcpPort) || 9100);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  };
+
+  const runTest = async (fn) => {
     setTestSt("testing"); setTestMsg("");
     try { await fn(); }
     catch (err) {
       setTestSt("error");
       setTestMsg(err.name === "AbortError"
-        ? "Sin respuesta."
-        : err.message?.includes("fetch") || err.message?.includes("Failed")
-          ? `No conecta a ${ip}.`
-          : err.message || "Error");
+        ? "Sin respuesta (timeout)."
+        : err.message || "Error desconocido");
     }
   };
 
-  const testPing = () => runFetch(async () => {
+  const testPing = () => runTest(async () => {
+    if (!ip.trim()) throw new Error("No hay IP de proxy configurada.");
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 5000);
-    const res = await fetch(ip + "/ping", { method: "GET", signal: ctrl.signal }).catch(() => null);
+    const res = await fetch(ip.trim() + "/ping", { method: "GET", signal: ctrl.signal }).catch(() => null);
     clearTimeout(t);
     if (!res) { const e = new Error("Sin respuesta"); e.name = "AbortError"; throw e; }
-    setTestSt("ok"); setTestMsg(res.ok ? "Servidor alcanzable." : `Responde HTTP ${res.status}.`);
+    setTestSt("ok"); setTestMsg(res.ok ? "Servidor proxy alcanzable." : `Responde HTTP ${res.status}.`);
   });
 
-  const testPrint = () => runFetch(async () => {
-    const fake = { id: "TEST0001", total: 1000, method: "Efectivo", received: 1000, change: 0, items: [{ name: "Producto prueba", qty: 1, price: 1000 }] };
-    const b64 = buildEscPos(fake, name.toUpperCase());
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 8000);
-    const res = await fetch(`${ip}/imprimir`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ticket: b64 }), signal: ctrl.signal });
-    clearTimeout(t);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    setTestSt("ok"); setTestMsg("Ticket de prueba impreso.");
+  const testPrint = () => runTest(async () => {
+    const fake = { id: "TEST0001", total: 1000, method: "Efectivo", received: 1000, change: 0,
+      items: [{ name: "Producto prueba", qty: 1, price: 1000 }] };
+    const b64 = buildEscPos(fake, name.toUpperCase() || "PRUEBA");
+    const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+
+    if (IS_NATIVE) {
+      // APK: TCP directo sin proxy
+      const ip_ = rawIp.trim();
+      if (!ip_) throw new Error("Configurá la IP TCP de la impresora primero.");
+      const port = parseInt(tcpPort) || 9100;
+      await (TcpPrint as any).print({ ip: ip_, port, data: Array.from(bytes) });
+      setTestSt("ok"); setTestMsg("Ticket de prueba enviado por TCP.");
+    } else {
+      // Web: via proxy HTTP
+      if (!ip.trim()) throw new Error("Configurá la IP del proxy primero.");
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 8000);
+      const res = await fetch(`${ip.trim()}/imprimir`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ticket: b64 }),
+        signal: ctrl.signal
+      });
+      clearTimeout(t);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setTestSt("ok"); setTestMsg("Ticket de prueba impreso.");
+    }
   });
 
   return (
@@ -4036,43 +4065,46 @@ function LocationCard({ loc, onChange, onDelete }) {
       <div className="location-card-header">
         <span style={{ fontSize: 16 }}>📍</span>
         <input className="location-name-input" value={name}
-          onChange={e => setName(e.target.value)}
-          onBlur={() => { if (name.trim() && name !== loc.name) onChange("name", name.trim()); }}
+          onChange={e => { setName(e.target.value); setSaved(false); }}
           placeholder="Nombre de la ubicación" />
         <button className="location-del-btn" onClick={() => {
           if (window.confirm(`¿Eliminar "${name}"?`)) onDelete();
         }} title="Eliminar ubicación">🗑️</button>
       </div>
+
       <input className="modal-input" value={ip}
-        onChange={e => setIp(e.target.value)}
-        onBlur={() => { if (ip.trim() && ip !== loc.ip) onChange("ip", ip.trim()); }}
-        placeholder="http://10.0.0.100:3000 (proxy web)" />
+        onChange={e => { setIp(e.target.value); setSaved(false); }}
+        placeholder="http://10.0.0.100:3000 (proxy web, opcional)" />
 
       {/* Campos TCP directo — para la APK nativa */}
       <div style={{ display:"flex", gap:6, marginTop:6 }}>
         <input className="modal-input" value={rawIp} style={{ flex:2 }}
-          onChange={e => setRawIp(e.target.value)}
-          onBlur={() => { if (rawIp !== (loc.rawIp || "")) onChange("rawIp", rawIp.trim()); }}
+          onChange={e => { setRawIp(e.target.value); setSaved(false); }}
           placeholder="IP TCP ej: 192.168.1.50" />
         <input className="modal-input" value={tcpPort} style={{ flex:1, fontFamily:"monospace" }}
-          onChange={e => setTcpPort(e.target.value)}
-          onBlur={() => { const p = parseInt(tcpPort) || 9100; if (p !== (loc.tcpPort || 9100)) onChange("tcpPort", p); }}
+          onChange={e => { setTcpPort(e.target.value); setSaved(false); }}
           placeholder="9100" />
       </div>
       <div style={{ fontSize:10, color:"#6b7280", marginTop:3 }}>
         IP TCP y puerto se usan en la APK nativa (sin proxy)
       </div>
 
-      <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+      {/* Botón guardar */}
+      <button className="btn-primary" style={{ width:"100%", marginTop:8, fontSize:13, padding:"8px" }}
+        onClick={handleSave} disabled={!name.trim()}>
+        {saved ? "✅ Guardado" : "💾 Guardar cambios"}
+      </button>
+
+      <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
         <button className="btn-secondary"
           style={{ flex: 1, fontSize: 12, padding: "6px 4px", opacity: testSt === "testing" ? 0.6 : 1 }}
           onClick={testPing} disabled={testSt === "testing"}>
-          {testSt === "testing" ? "..." : "🔌 Ping"}
+          {testSt === "testing" ? "..." : "🔌 Ping proxy"}
         </button>
         <button className="btn-secondary"
           style={{ flex: 1, fontSize: 12, padding: "6px 4px", opacity: testSt === "testing" ? 0.6 : 1 }}
           onClick={testPrint} disabled={testSt === "testing"}>
-          🖨️ Prueba
+          {testSt === "testing" ? "..." : "🖨️ Prueba"}
         </button>
       </div>
       {testSt === "ok"    && <div className="print-ok">✅ {testMsg}</div>}
@@ -4139,7 +4171,7 @@ function SettingsView({ userProfile }) {
   };
 
   const addLoc = async () => {
-    if (!newName.trim() || !newIp.trim()) return;
+    if (!newName.trim()) return;
     const newLoc = {
       id: Date.now().toString(36),
       name: newName.trim(),
@@ -4199,7 +4231,7 @@ function SettingsView({ userProfile }) {
                   </div>
                   <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
                     <button className="btn-primary" style={{ flex: 1 }} onClick={addLoc}
-                      disabled={!newName.trim() || !newIp.trim()}>Guardar</button>
+                      disabled={!newName.trim()}>Guardar</button>
                     <button className="btn-secondary" style={{ flex: 1 }} onClick={() => {
                       setShowAdd(false); setNewName(""); setNewIp("http://"); setNewRawIp(""); setNewTcpPort("9100");
                     }}>Cancelar</button>
